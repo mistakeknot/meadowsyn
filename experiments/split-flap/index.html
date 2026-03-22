@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meadowsyn Factory Status</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --color-idle: #666;
+      --color-exec: #e0e0e0;
+      --color-disp: #999;
+      --color-fail: #e74c3c;
+      --color-gate: #f39c12;
+      --color-stale: var(--color-gate); /* intentional: same amber for all warnings */
+      --color-bg: #0a0a0a;
+      --color-bg-alert: #1a0000;
+      --color-text: #ccc;
+      --color-separator: #1a1a1a;
+      --row-height: 2.2em;
+      --char-width: 1ch;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--color-bg);
+      color: var(--color-text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      min-width: 900px;
+      overflow-x: auto;
+    }
+
+    /* --- Header --- */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--color-separator);
+      transition: background-color 0.5s ease;
+    }
+    .header.alert {
+      background: var(--color-bg-alert);
+    }
+    .header-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #fff;
+    }
+    .header-stats {
+      display: flex;
+      gap: 16px;
+      color: var(--color-idle);
+      font-size: 13px;
+    }
+    .header-stats .stat-value {
+      color: var(--color-text);
+    }
+
+    /* --- Board --- */
+    .board {
+      padding: 8px 24px;
+    }
+
+    /* --- Column headers --- */
+    .col-headers {
+      display: flex;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--color-separator);
+      color: var(--color-idle);
+      font-size: 11px;
+      letter-spacing: 1px;
+    }
+    .col-headers span {
+      flex-shrink: 0;
+    }
+
+    /* --- Rows --- */
+    .row {
+      display: flex;
+      align-items: center;
+      height: var(--row-height);
+      border-bottom: 1px solid var(--color-separator);
+    }
+    .row.placeholder {
+      opacity: 0.3;
+    }
+
+    /* --- Cells --- */
+    .cell {
+      flex-shrink: 0;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .cell-status { width: 6ch; font-weight: 700; }
+    .cell-agent  { width: 26ch; }
+    .cell-bead   { width: 14ch; color: var(--color-idle); }
+    .cell-title  { width: 34ch; }
+    .cell-dur    { width: 7ch; text-align: right; color: var(--color-idle); }
+
+    /* Status colors */
+    .status-idle { color: var(--color-idle); }
+    .status-exec { color: var(--color-exec); }
+    .status-disp { color: var(--color-disp); }
+    .status-fail { color: var(--color-fail); text-shadow: 0 0 8px var(--color-fail); }
+    .status-gate { color: var(--color-gate); text-shadow: 0 0 8px var(--color-gate); }
+
+    /* --- Flap Animation --- */
+    .flap-cell {
+      perspective: 800px;
+      transform-style: preserve-3d;
+      display: inline-flex;
+    }
+
+    .flap-char {
+      display: inline-block;
+      position: relative;
+      width: var(--char-width);
+      height: 1.4em;
+      overflow: hidden;
+    }
+
+    /* Static state: both halves show current char */
+    .flap-char::before,
+    .flap-char::after {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      backface-visibility: hidden;
+      transition: none;
+    }
+    .flap-char::before {
+      content: attr(data-char-old);
+      top: 0;
+      clip-path: inset(0 0 50% 0);
+      transform-origin: bottom center;
+    }
+    .flap-char::after {
+      content: attr(data-char);
+      top: 0;
+      clip-path: inset(50% 0 0 0);
+      transform-origin: top center;
+    }
+
+    /* Flipping: top falls forward, bottom rises from behind */
+    .flap-char.flipping::before {
+      animation: flap-top 0.15s ease-in forwards;
+      animation-delay: calc(var(--ci) * 30ms);
+      will-change: transform;
+    }
+    .flap-char.flipping::after {
+      animation: flap-bottom 0.15s ease-out forwards;
+      animation-delay: calc(var(--ci) * 30ms + 0.15s);
+      will-change: transform;
+      transform: rotateX(90deg);
+    }
+
+    @keyframes flap-top {
+      0%   { transform: rotateX(0deg); }
+      100% { transform: rotateX(-90deg); }
+    }
+    @keyframes flap-bottom {
+      0%   { transform: rotateX(90deg); }
+      100% { transform: rotateX(0deg); }
+    }
+
+    /* --- Footer --- */
+    .footer {
+      padding: 12px 24px;
+      color: var(--color-idle);
+      font-size: 11px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .footer .stale-warning {
+      color: var(--color-stale);
+      display: none;
+    }
+    .footer .stale-warning.visible {
+      display: inline;
+    }
+  </style>
+</head>
+<body>
+
+<div class="header" id="header">
+  <div class="header-title">MEADOWSYN FACTORY STATUS</div>
+  <div class="header-stats">
+    <span id="stat-time"></span>
+    <span>|</span>
+    <span>AGENTS: <span class="stat-value" id="stat-agents">--/--</span></span>
+    <span>|</span>
+    <span>QUEUE: <span class="stat-value" id="stat-queue">--</span></span>
+  </div>
+</div>
+
+<div class="board">
+  <div class="col-headers">
+    <span class="cell cell-status">STATUS</span>
+    <span class="cell cell-agent">AGENT</span>
+    <span class="cell cell-bead">BEAD</span>
+    <span class="cell cell-title">TASK</span>
+    <span class="cell cell-dur">TIME</span>
+  </div>
+  <div id="rows"></div>
+</div>
+
+<div class="footer">
+  <span id="data-source">DATA: --</span>
+  <span class="stale-warning" id="stale-warning">DATA STALE</span>
+</div>
+
+<script type="module">
+  const MIN_ROWS = 12;
+  const POLL_INTERVAL = 5000;
+  const STALE_THRESHOLD = 15000;
+  const FLIP_PHASE = 150; // each phase (top-fall, bottom-rise) in ms
+  const CHAR_STAGGER = 30; // ms between adjacent characters
+
+  const STATUS_ORDER = { blocked: 0, gated: 1, executing: 2, dispatching: 3, idle: 4 };
+  // blocked→FAIL, gated→GATE: display labels diverge from status keys intentionally
+  const STATUS_LABELS = { executing: 'EXEC', dispatching: 'DISP', idle: 'IDLE', blocked: 'FAIL', gated: 'GATE' };
+  const STATUS_CLASSES = { executing: 'status-exec', dispatching: 'status-disp', idle: 'status-idle', blocked: 'status-fail', gated: 'status-gate' };
+
+  const DASH = '\u2500'; // ─
+
+  const COL = { status: 4, agent: 24, bead: 12, title: 32, dur: 5 };
+  const COL_KEYS = ['status', 'agent', 'bead', 'title', 'dur'];
+  const CELL_CLASSES = ['cell cell-status', 'cell cell-agent', 'cell cell-bead', 'cell cell-title', 'cell cell-dur'];
+
+  let lastFetchOk = Date.now();
+
+  // --- Data Layer ---
+
+  async function fetchSnapshot() {
+    for (const url of ['snapshot.json', 'mock-snapshot.json']) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.error) continue;
+          lastFetchOk = Date.now();
+          document.getElementById('data-source').textContent = 'DATA: ' + url.replace('.json', '').toUpperCase();
+          return data;
+        }
+      } catch { /* try next */ }
+    }
+    return null;
+  }
+
+  // --- Data Mapping ---
+
+  function buildRows(snap) {
+    if (!snap) return [];
+
+    const rows = [];
+    const seen = new Set();
+
+    // wip[].agent and roster[].session are the same identifier (session display name)
+    for (const w of (snap.wip || [])) {
+      const agentName = w.agent || w.bead_id || '?';
+      seen.add(agentName);
+      rows.push({ status: w.status || 'idle', agent: agentName, bead: w.bead_id || '', title: w.title || '', age: w.age || 0 });
+    }
+
+    for (const r of (snap.roster || [])) {
+      if (!seen.has(r.session)) {
+        seen.add(r.session);
+        rows.push({ status: 'idle', agent: r.session || '?', bead: '', title: '', age: 0 });
+      }
+    }
+
+    // Stable sort: status priority, then alphabetical to prevent spurious row swaps
+    rows.sort((a, b) => {
+      const d = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
+      return d !== 0 ? d : a.agent.localeCompare(b.agent);
+    });
+    return rows;
+  }
+
+  function formatDuration(secs) {
+    if (!secs || secs <= 0) return DASH.repeat(COL.dur);
+    if (secs < 3600) {
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    }
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+  }
+
+  function rowToCells(row) {
+    return [
+      (STATUS_LABELS[row.status] || 'IDLE').padEnd(COL.status),
+      row.agent.substring(0, COL.agent).padEnd(COL.agent),
+      (row.bead || DASH.repeat(COL.bead)).substring(0, COL.bead).padEnd(COL.bead),
+      (row.title || DASH.repeat(COL.title)).substring(0, COL.title).padEnd(COL.title),
+      formatDuration(row.age).padStart(COL.dur),
+    ];
+  }
+
+  function emptyCells() {
+    return [
+      DASH.repeat(COL.status),
+      DASH.repeat(COL.agent),
+      DASH.repeat(COL.bead),
+      DASH.repeat(COL.title),
+      DASH.repeat(COL.dur),
+    ];
+  }
+
+  // --- DOM Rendering ---
+
+  const rowsContainer = document.getElementById('rows');
+
+  function createRowElement() {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'row';
+    for (let ci = 0; ci < COL_KEYS.length; ci++) {
+      const cellDiv = document.createElement('div');
+      cellDiv.className = CELL_CLASSES[ci];
+      const flapCell = document.createElement('span');
+      flapCell.className = 'flap-cell';
+      flapCell.dataset.col = COL_KEYS[ci];
+      cellDiv.appendChild(flapCell);
+      rowEl.appendChild(cellDiv);
+    }
+    return rowEl;
+  }
+
+  function ensureRowElements(count) {
+    while (rowsContainer.children.length < count) {
+      rowsContainer.appendChild(createRowElement());
+    }
+  }
+
+  function ensureFlapChars(flapCell, length) {
+    while (flapCell.children.length < length) {
+      const ch = document.createElement('span');
+      ch.className = 'flap-char';
+      ch.style.setProperty('--ci', String(flapCell.children.length));
+      ch.setAttribute('data-char', ' ');
+      ch.setAttribute('data-char-old', ' ');
+      flapCell.appendChild(ch);
+    }
+    while (flapCell.children.length > length) {
+      flapCell.removeChild(flapCell.lastChild);
+    }
+  }
+
+  function renderBoard(dataRows) {
+    const totalRows = Math.max(dataRows.length, MIN_ROWS);
+    ensureRowElements(totalRows);
+
+    // Build cell text arrays and status per row
+    const allCells = [];
+    const allStatuses = [];
+    for (let i = 0; i < totalRows; i++) {
+      if (i < dataRows.length) {
+        allCells.push(rowToCells(dataRows[i]));
+        allStatuses.push(dataRows[i].status);
+      } else {
+        allCells.push(emptyCells());
+        allStatuses.push('idle');
+      }
+    }
+
+    // Phase 1: Batch read all current chars
+    const currentChars = [];
+    for (let i = 0; i < totalRows; i++) {
+      const rowEl = rowsContainer.children[i];
+      const flapCells = rowEl.querySelectorAll('.flap-cell');
+      const rowChars = [];
+      flapCells.forEach(fc => {
+        const chars = [];
+        for (const ch of fc.children) {
+          chars.push(ch.getAttribute('data-char') || ' ');
+        }
+        rowChars.push(chars);
+      });
+      currentChars.push(rowChars);
+    }
+
+    // Phase 2+3: Diff in memory, then write in single pass
+    for (let i = 0; i < totalRows; i++) {
+      const rowEl = rowsContainer.children[i];
+      const isPlaceholder = i >= dataRows.length;
+      rowEl.className = isPlaceholder ? 'row placeholder' : 'row';
+      rowEl.style.setProperty('--ri', String(i));
+
+      const flapCells = rowEl.querySelectorAll('.flap-cell');
+      const statusClass = STATUS_CLASSES[allStatuses[i]] || 'status-idle';
+
+      flapCells.forEach((fc, ci) => {
+        const newText = allCells[i][ci] || '';
+        ensureFlapChars(fc, newText.length);
+
+        // Apply status color to status cell only
+        if (ci === 0) {
+          fc.parentElement.className = 'cell cell-status ' + statusClass;
+        }
+
+        const oldChars = currentChars[i]?.[ci] || [];
+        for (let j = 0; j < fc.children.length; j++) {
+          const charEl = fc.children[j];
+          const newChar = newText[j] || ' ';
+          const oldChar = oldChars[j] || ' ';
+
+          if (newChar !== oldChar) {
+            charEl.setAttribute('data-char-old', oldChar);
+            charEl.setAttribute('data-char', newChar);
+            charEl.classList.remove('flipping');
+            void charEl.offsetWidth; // force reflow to restart animation
+            charEl.classList.add('flipping');
+
+            // Cleanup delay mirrors CSS: char stagger + both animation phases
+            const delay = (j * CHAR_STAGGER) + (FLIP_PHASE * 2) + 50; // 50ms slack
+            setTimeout(() => {
+              if (!charEl.isConnected) return; // guard against detached nodes
+              charEl.classList.remove('flipping');
+              charEl.setAttribute('data-char-old', newChar);
+            }, delay);
+          }
+        }
+      });
+    }
+
+    // Remove excess rows
+    while (rowsContainer.children.length > totalRows) {
+      rowsContainer.removeChild(rowsContainer.lastChild);
+    }
+  }
+
+  function updateHeader(snap) {
+    if (!snap) return;
+
+    const now = snap.timestamp ? new Date(snap.timestamp) : new Date();
+    const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+    const timeStr = now.toLocaleTimeString('en-GB', { hour12: false });
+    document.getElementById('stat-time').textContent = dateStr + '  ' + timeStr;
+
+    const fleet = snap.fleet || {};
+    const active = (snap.wip || []).length;
+    const total = fleet.total_agents || (snap.roster || []).length;
+    document.getElementById('stat-agents').textContent = active + '/' + total;
+
+    const queueDepth = (snap.queue || []).length;
+    document.getElementById('stat-queue').textContent = String(queueDepth);
+
+    // Alert: header bg shifts when >50% of WIP are anomalies
+    const anomalyCount = (snap.wip || []).filter(w => w.status === 'blocked' || w.status === 'gated').length;
+    const header = document.getElementById('header');
+    if (anomalyCount > 0 && active > 0 && anomalyCount >= Math.ceil(active / 2)) {
+      header.classList.add('alert');
+    } else {
+      header.classList.remove('alert');
+    }
+  }
+
+  function updateStale() {
+    const stale = (Date.now() - lastFetchOk) > STALE_THRESHOLD;
+    document.getElementById('stale-warning').classList.toggle('visible', stale);
+  }
+
+  // --- Main Loop ---
+
+  async function tick() {
+    const snap = await fetchSnapshot();
+    if (snap) {
+      const rows = buildRows(snap);
+      renderBoard(rows);
+      updateHeader(snap);
+    }
+    updateStale();
+  }
+
+  await tick();
+  setInterval(tick, POLL_INTERVAL);
+</script>
+
+</body>
+</html>

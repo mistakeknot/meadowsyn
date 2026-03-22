@@ -1,0 +1,417 @@
+{
+  "timestamp": "2026-03-22T14:32:07.000Z",
+  "fleet": {
+    "total_agents": 20,
+    "agents": [
+      {
+        "session_name": "warp-demarch-claude",
+        "status": "executing"
+      },
+      {
+        "session_name": "rio-demarch-codex",
+        "status": "executing"
+      },
+      {
+        "session_name": "warp-shadow-work-claude",
+        "status": "executing"
+      },
+      {
+        "session_name": "iterm-meadowsyn-claude",
+        "status": "dispatching"
+      },
+      {
+        "session_name": "ghostty-interflux-claude",
+        "status": "dispatching"
+      },
+      {
+        "session_name": "warp-interkasten-codex",
+        "status": "idle"
+      },
+      {
+        "session_name": "kitty-demarch-gemini",
+        "status": "idle"
+      },
+      {
+        "session_name": "rio-enozo-claude",
+        "status": "idle"
+      },
+      {
+        "session_name": "warp-clavain-claude",
+        "status": "idle"
+      },
+      {
+        "session_name": "alacritty-demarch-claude",
+        "status": "blocked"
+      },
+      {
+        "session_name": "zed-interspect-claude",
+        "status": "gated"
+      },
+      {
+        "session_name": "wezterm-demarch-codex",
+        "status": "idle"
+      },
+      {
+        "session_name": "rio-interlock-claude",
+        "status": "idle"
+      },
+      {
+        "session_name": "warp-interpeer-claude",
+        "status": "executing"
+      },
+      {
+        "session_name": "iterm-interpath-codex",
+        "status": "idle"
+      },
+      {
+        "session_name": "ghostty-demarch-claude",
+        "status": "idle"
+      },
+      {
+        "session_name": "kitty-interlab-claude",
+        "status": "dispatching"
+      },
+      {
+        "session_name": "warp-tuivision-claude",
+        "status": "idle"
+      },
+      {
+        "session_name": "rio-demarch-claude",
+        "status": "idle"
+      },
+      {
+        "session_name": "warp-interdeep-claude",
+        "status": "idle"
+      }
+    ]
+  },
+  "queue": [
+    {
+      "bead_id": "Demarch-ab12",
+      "priority": "P0",
+      "title": "Fix auth token rotation",
+      "status": "open"
+    },
+    {
+      "bead_id": "Demarch-cd34",
+      "priority": "P1",
+      "title": "Migrate session store to Dolt",
+      "status": "open"
+    },
+    {
+      "bead_id": "Demarch-ef56",
+      "priority": "P1",
+      "title": "Add webhook retry logic",
+      "status": "open"
+    },
+    {
+      "bead_id": "Demarch-gh78",
+      "priority": "P2",
+      "title": "Refactor fleet enrichment",
+      "status": "open"
+    },
+    {
+      "bead_id": "Demarch-ij90",
+      "priority": "P2",
+      "title": "Sweep stale plugin caches",
+      "status": "open"
+    }
+  ],
+  "wip": [
+    {
+      "bead_id": "Demarch-r24y",
+      "project": "demarch",
+      "status": "executing",
+      "title": "Split-flap departure board",
+      "age": 2340,
+      "agent": "Mistake Not..."
+    },
+    {
+      "bead_id": "Demarch-agi0",
+      "project": "demarch",
+      "status": "executing",
+      "title": "Hydra ambient field",
+      "age": 4521,
+      "agent": "Grey Area"
+    },
+    {
+      "bead_id": "Demarch-k1m2",
+      "project": "shadow-work",
+      "status": "executing",
+      "title": "Session replay indexer",
+      "age": 1230,
+      "agent": "Falling Outside The Normal Moral Constraints"
+    },
+    {
+      "bead_id": "Demarch-n3o4",
+      "project": "meadowsyn",
+      "status": "dispatching",
+      "title": "Cytoscape graph layout",
+      "age": 120,
+      "agent": "Sleeper Service"
+    },
+    {
+      "bead_id": "Demarch-p5q6",
+      "project": "interflux",
+      "status": "dispatching",
+      "title": "Agent triage calibration",
+      "age": 45,
+      "agent": "So Much For Subtlety"
+    },
+    {
+      "bead_id": "Demarch-s7t8",
+      "project": "demarch",
+      "status": "blocked",
+      "title": "Dolt migration rollback",
+      "age": 7200,
+      "agent": "Just Read The Instructions"
+    },
+    {
+      "bead_id": "Demarch-u9v0",
+      "project": "interspect",
+      "status": "gated",
+      "title": "Evidence pipeline v2",
+      "age": 3600,
+      "agent": "Of Course I Still Love You"
+    },
+    {
+      "bead_id": "Demarch-w1x2",
+      "project": "interpeer",
+      "status": "executing",
+      "title": "Oracle timeout handling",
+      "age": 890,
+      "agent": "Experiencing A Significant Gravitas Shortfall"
+    },
+    {
+      "bead_id": "Demarch-y3z4",
+      "project": "interlab",
+      "status": "dispatching",
+      "title": "Campaign mutation tracking",
+      "age": 30,
+      "agent": "Irregular Apocalypse"
+    }
+  ],
+  "dispatches": [
+    {
+      "bead_id": "Demarch-r24y",
+      "agent": "Mistake Not...",
+      "timestamp": "2026-03-22T14:00:00.000Z"
+    },
+    {
+      "bead_id": "Demarch-agi0",
+      "agent": "Grey Area",
+      "timestamp": "2026-03-22T13:15:00.000Z"
+    }
+  ],
+  "watchdog": {
+    "status": "healthy",
+    "last_check": "2026-03-22T14:32:00.000Z"
+  },
+  "factory_paused": false,
+  "roster": [
+    {
+      "session": "Mistake Not...",
+      "project": "demarch",
+      "terminal": "warp",
+      "agent": "claude",
+      "live": true,
+      "active_beads": [
+        {
+          "bead_id": "Demarch-r24y"
+        }
+      ]
+    },
+    {
+      "session": "Grey Area",
+      "project": "demarch",
+      "terminal": "rio",
+      "agent": "codex",
+      "live": true,
+      "active_beads": [
+        {
+          "bead_id": "Demarch-agi0"
+        }
+      ]
+    },
+    {
+      "session": "Falling Outside The Normal Moral Constraints",
+      "project": "shadow-work",
+      "terminal": "warp",
+      "agent": "claude",
+      "live": true,
+      "active_beads": [
+        {
+          "bead_id": "Demarch-k1m2"
+        }
+      ]
+    },
+    {
+      "session": "Sleeper Service",
+      "project": "meadowsyn",
+      "terminal": "iterm",
+      "agent": "claude",
+      "live": true,
+      "active_beads": []
+    },
+    {
+      "session": "So Much For Subtlety",
+      "project": "interflux",
+      "terminal": "ghostty",
+      "agent": "claude",
+      "live": true,
+      "active_beads": []
+    },
+    {
+      "session": "Just Read The Instructions",
+      "project": "demarch",
+      "terminal": "alacritty",
+      "agent": "claude",
+      "live": true,
+      "active_beads": [
+        {
+          "bead_id": "Demarch-s7t8"
+        }
+      ]
+    },
+    {
+      "session": "Of Course I Still Love You",
+      "project": "interspect",
+      "terminal": "zed",
+      "agent": "claude",
+      "live": true,
+      "active_beads": [
+        {
+          "bead_id": "Demarch-u9v0"
+        }
+      ]
+    },
+    {
+      "session": "Experiencing A Significant Gravitas Shortfall",
+      "project": "interpeer",
+      "terminal": "warp",
+      "agent": "claude",
+      "live": true,
+      "active_beads": [
+        {
+          "bead_id": "Demarch-w1x2"
+        }
+      ]
+    },
+    {
+      "session": "Irregular Apocalypse",
+      "project": "interlab",
+      "terminal": "kitty",
+      "agent": "claude",
+      "live": true,
+      "active_beads": []
+    },
+    {
+      "session": "Limiting Factor",
+      "project": "interkasten",
+      "terminal": "warp",
+      "agent": "codex",
+      "live": false,
+      "active_beads": []
+    },
+    {
+      "session": "Xenophobe",
+      "project": "demarch",
+      "terminal": "kitty",
+      "agent": "gemini",
+      "live": false,
+      "active_beads": []
+    },
+    {
+      "session": "Ethics Gradient",
+      "project": "enozo",
+      "terminal": "rio",
+      "agent": "claude",
+      "live": false,
+      "active_beads": []
+    }
+  ],
+  "by_project": {
+    "demarch": {
+      "sessions": 5,
+      "active_beads": 3,
+      "terminals": [
+        "warp",
+        "rio",
+        "alacritty",
+        "kitty"
+      ],
+      "agent_types": [
+        "claude",
+        "codex",
+        "gemini"
+      ]
+    },
+    "shadow-work": {
+      "sessions": 1,
+      "active_beads": 1,
+      "terminals": [
+        "warp"
+      ],
+      "agent_types": [
+        "claude"
+      ]
+    },
+    "meadowsyn": {
+      "sessions": 1,
+      "active_beads": 0,
+      "terminals": [
+        "iterm"
+      ],
+      "agent_types": [
+        "claude"
+      ]
+    },
+    "interflux": {
+      "sessions": 1,
+      "active_beads": 0,
+      "terminals": [
+        "ghostty"
+      ],
+      "agent_types": [
+        "claude"
+      ]
+    },
+    "interspect": {
+      "sessions": 1,
+      "active_beads": 1,
+      "terminals": [
+        "zed"
+      ],
+      "agent_types": [
+        "claude"
+      ]
+    },
+    "interpeer": {
+      "sessions": 1,
+      "active_beads": 1,
+      "terminals": [
+        "warp"
+      ],
+      "agent_types": [
+        "claude"
+      ]
+    },
+    "interlab": {
+      "sessions": 1,
+      "active_beads": 0,
+      "terminals": [
+        "kitty"
+      ],
+      "agent_types": [
+        "claude"
+      ]
+    }
+  },
+  "meta": {
+    "roster_total": 12,
+    "join_coverage": 92,
+    "live_sessions": 9,
+    "fleet_total": 20,
+    "fleet_matched": 18
+  }
+}
