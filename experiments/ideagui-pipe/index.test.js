@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readRoster, readFactoryStatus, generateSnapshot } from './index.js';
+import { readRoster, readFactoryStatus, generateSnapshot, parseTmuxSession } from './index.js';
 
 // === Roster tests ===
 
@@ -49,6 +49,39 @@ test('readRoster caches result by mtime', (t) => {
   assert.equal(r1, r2, 'should return cached reference');
 });
 
+// === Tmux session parser tests ===
+
+test('parseTmuxSession: standard terminal-project-agent pattern', () => {
+  const r = parseTmuxSession('warp-demarch-claude');
+  assert.deepEqual(r, { terminal: 'warp', project: 'demarch', agent: 'claude' });
+});
+
+test('parseTmuxSession: hyphenated project name', () => {
+  const r = parseTmuxSession('iterm-elf-revel-sim-claude');
+  assert.deepEqual(r, { terminal: 'iterm', project: 'elf-revel-sim', agent: 'claude' });
+});
+
+test('parseTmuxSession: codex agent', () => {
+  const r = parseTmuxSession('rio-intercom-codex');
+  assert.deepEqual(r, { terminal: 'rio', project: 'intercom', agent: 'codex' });
+});
+
+test('parseTmuxSession: Warp path-separator pattern', () => {
+  const r = parseTmuxSession('/warp//demarch///sprint@claude');
+  assert.deepEqual(r, { terminal: 'warp', project: 'demarch', agent: 'claude' });
+});
+
+test('parseTmuxSession: freeform name returns null', () => {
+  assert.equal(parseTmuxSession('admin'), null);
+  assert.equal(parseTmuxSession('devops'), null);
+  assert.equal(parseTmuxSession('claude-work'), null);
+  assert.equal(parseTmuxSession('beads-migrate-dolt'), null);
+});
+
+test('parseTmuxSession: unknown terminal returns null', () => {
+  assert.equal(parseTmuxSession('unknown-demarch-claude'), null);
+});
+
 // === Factory-status tests (require clavain-cli) ===
 
 const hasClavainCli = (() => {
@@ -87,4 +120,15 @@ test('generateSnapshot with factoryOnly skips roster', { skip: !hasClavainCli },
   assert.equal(snap.roster.length, 0, 'roster empty in factory-only');
   assert.equal(snap.meta.roster_total, 0);
   assert.ok(snap.fleet, 'still has fleet');
+});
+
+test('generateSnapshot includes live field and liveness meta', { skip: !hasClavainCli }, () => {
+  const snap = generateSnapshot();
+  assert.ok(typeof snap.meta.live_sessions === 'number', 'has live_sessions count');
+  assert.ok(typeof snap.meta.fleet_total === 'number', 'has fleet_total');
+  assert.ok(typeof snap.meta.fleet_matched === 'number', 'has fleet_matched');
+  assert.ok(snap.meta.live_sessions > 0, 'at least some sessions are live');
+  for (const s of snap.roster) {
+    assert.ok(typeof s.live === 'boolean', `${s.session} has boolean live field`);
+  }
 });

@@ -45,6 +45,60 @@ export function readFactoryStatus() {
   return data;
 }
 
+const KNOWN_TERMINALS = new Set([
+  'warp', 'alacritty', 'iterm', 'ghostty', 'kitty', 'rio', 'wezterm', 'zed', 'termius', 'local',
+]);
+const KNOWN_AGENTS = new Set(['claude', 'codex', 'gemini']);
+
+/**
+ * Parse a tmux session name into (terminal, project, agent) components.
+ * Returns null if the name doesn't match any known pattern.
+ * @param {string} name
+ * @returns {{ terminal: string, project: string, agent: string } | null}
+ */
+export function parseTmuxSession(name) {
+  // Pattern 1: /terminal//project///role@agent (Warp path-separator)
+  const warpMatch = name.match(/^\/?(\w+)\/\/([^/]+)\/\/\/[^@]*@(\w+)$/);
+  if (warpMatch) {
+    const [, terminal, project, agent] = warpMatch;
+    if (KNOWN_TERMINALS.has(terminal) && KNOWN_AGENTS.has(agent)) {
+      return { terminal, project: project.toLowerCase(), agent };
+    }
+  }
+
+  // Pattern 2: terminal-project-agent or terminal-project-domain-agent
+  // Split from ends: first segment = terminal, last segment = agent, middle = project
+  const parts = name.split('-');
+  if (parts.length >= 3) {
+    const terminal = parts[0].toLowerCase();
+    const agent = parts[parts.length - 1].toLowerCase();
+    if (KNOWN_TERMINALS.has(terminal) && KNOWN_AGENTS.has(agent)) {
+      const project = parts.slice(1, -1).join('-').toLowerCase();
+      return { terminal, project, agent };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Match fleet agents (tmux sessions) to roster entries.
+ * Returns a Set of matched roster keys ("project|terminal|agent").
+ * @param {object[]} fleetAgents - From factory-status fleet.agents
+ * @param {object[]} rosterSessions - From ideagui.json sessions
+ * @returns {Set<string>}
+ */
+function matchFleetToRoster(fleetAgents, rosterSessions) {
+  const liveKeys = new Set();
+  for (const fa of fleetAgents) {
+    const parsed = parseTmuxSession(fa.session_name);
+    if (parsed) {
+      liveKeys.add(`${parsed.project}|${parsed.terminal}|${parsed.agent}`);
+    }
+  }
+  return liveKeys;
+}
+
 /**
  * Generate a snapshot with both layers and project-level join.
  * @param {object} [options]
@@ -79,14 +133,19 @@ export function generateSnapshot({ ideaguiPath, factoryOnly = false } = {}) {
     wipByProject.get(proj).push(w);
   }
 
-  // Enrich roster with active_beads (project-level, shared per project)
+  // Match tmux sessions to roster for per-agent liveness
+  const fleetAgents = ops.fleet.agents || [];
+  const liveKeys = matchFleetToRoster(fleetAgents, roster.sessions);
+
+  // Enrich roster with active_beads (project-level) and live (per-agent)
   const projectBeadArrays = new Map();
   const enrichedRoster = roster.sessions.map(s => {
     const key = (s.project || '').toLowerCase();
     if (!projectBeadArrays.has(key)) {
       projectBeadArrays.set(key, wipByProject.get(key) || []);
     }
-    return { ...s, active_beads: projectBeadArrays.get(key) };
+    const rosterKey = `${(s.project || '').toLowerCase()}|${(s.terminal || '').toLowerCase()}|${(s.agent || '').toLowerCase()}`;
+    return { ...s, active_beads: projectBeadArrays.get(key), live: liveKeys.has(rosterKey) };
   });
 
   // by_project rollup
@@ -129,6 +188,9 @@ export function generateSnapshot({ ideaguiPath, factoryOnly = false } = {}) {
     meta: {
       roster_total: roster.sessions.length,
       join_coverage: Math.round(joinCoverage * 100),
+      live_sessions: enrichedRoster.filter(s => s.live).length,
+      fleet_total: fleetAgents.length,
+      fleet_matched: fleetAgents.filter(fa => parseTmuxSession(fa.session_name) !== null).length,
     },
   };
 }
