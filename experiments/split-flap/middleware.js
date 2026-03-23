@@ -72,7 +72,7 @@ export async function middleware(req) {
       const rd = fd.get("redirect") || "/";
       if (pw === PASSWORD) {
         const tok = await signToken(String(Date.now()), PASSWORD);
-        const res = NextResponse.redirect(new URL(rd, req.url));
+        const res = NextResponse.redirect(new URL(rd, req.url), 303);
         res.cookies.set(COOKIE, tok, {
           httpOnly: true,
           secure: true,
@@ -82,7 +82,7 @@ export async function middleware(req) {
         });
         return res;
       }
-      return NextResponse.redirect(new URL(LOGIN + "?error=1", req.url));
+      return NextResponse.redirect(new URL(LOGIN + "?error=1", req.url), 303);
     }
 
     const c = req.cookies.get(COOKIE);
