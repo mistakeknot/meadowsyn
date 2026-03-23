@@ -3,105 +3,61 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hydra + Graph — Ambient Topology</title>
+  <title>Ambient Topology</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
   <style>
-    :root {
-      --bg: #0a0a0a;
-      --fg: #ccc;
-      --dim: #555;
-    }
+    :root { --bg: #0a0a0a; --fg: #ccc; --dim: #555; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: var(--bg);
-      color: var(--fg);
+      background: var(--bg); color: var(--fg);
       font-family: 'JetBrains Mono', monospace;
-      overflow: hidden;
-      height: 100vh;
+      overflow: hidden; height: 100vh;
     }
 
-    /* L1: Ambient field */
-    canvas#hydra-canvas {
-      position: fixed;
-      top: 0; left: 0;
+    /* L1: Ambient glow canvas */
+    canvas#glow {
+      position: fixed; top: 0; left: 0;
       width: 100vw; height: 100vh;
       z-index: 0;
     }
-
-    /* L2: Graph overlay */
+    /* L2: Graph */
     #cy {
-      position: fixed;
-      top: 0; left: 0;
+      position: fixed; top: 0; left: 0;
       width: 100vw; height: 100vh;
-      z-index: 1;
-      background: transparent;
+      z-index: 1; background: transparent;
     }
-
-    /* L3: HUD overlay */
-    .hud {
-      position: fixed;
-      z-index: 2;
-      pointer-events: none;
-    }
+    /* L3: HUD */
+    .hud { position: fixed; z-index: 2; pointer-events: none; }
     .hud-top {
       top: 0; left: 0; right: 0;
-      display: flex;
-      justify-content: space-between;
+      display: flex; justify-content: space-between;
       padding: 14px 24px;
-      background: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%);
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%);
     }
     .hud-bottom {
       bottom: 0; left: 0; right: 0;
       padding: 14px 24px;
-      background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%);
-      display: flex;
-      justify-content: space-between;
+      background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
+      display: flex; justify-content: space-between;
     }
-    .hud-title {
-      font-size: 14px;
-      letter-spacing: 3px;
-      color: rgba(255,255,255,0.35);
-    }
-    .hud-metrics {
-      display: flex;
-      gap: 20px;
-    }
-    .hud-metric .label {
-      font-size: 9px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: rgba(255,255,255,0.25);
-    }
-    .hud-metric .value {
-      font-size: 13px;
-      color: rgba(255,255,255,0.5);
-      margin-top: 1px;
-    }
-    .state-label {
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 1px;
-    }
-    .state-healthy  { color: rgba(46,204,113,0.6); }
-    .state-busy     { color: rgba(241,196,15,0.6); }
-    .state-degraded { color: rgba(243,156,18,0.6); }
-    .state-critical { color: rgba(231,76,60,0.7); }
-    .hud-hint {
-      font-size: 10px;
-      color: rgba(255,255,255,0.2);
-    }
+    .hud-title { font-size: 14px; letter-spacing: 3px; color: rgba(255,255,255,0.3); }
+    .hud-metrics { display: flex; gap: 20px; }
+    .hud-metric .label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.2); }
+    .hud-metric .value { font-size: 13px; color: rgba(255,255,255,0.45); margin-top: 1px; }
+    .hud-hint { font-size: 10px; color: rgba(255,255,255,0.15); }
+    .state-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+    .state-healthy  { color: rgba(46,204,113,0.5); }
+    .state-busy     { color: rgba(241,196,15,0.5); }
+    .state-degraded { color: rgba(243,156,18,0.5); }
+    .state-critical { color: rgba(231,76,60,0.6); }
   </style>
 </head>
 <body>
-  <!-- L1: Hydra ambient canvas -->
-  <canvas id="hydra-canvas" width="1280" height="720"></canvas>
-
-  <!-- L2: Cytoscape graph -->
+  <canvas id="glow"></canvas>
   <div id="cy"></div>
 
-  <!-- L3: HUD -->
   <div class="hud hud-top">
     <div class="hud-title">MEADOWSYN</div>
     <div class="hud-metrics">
@@ -116,91 +72,120 @@
     <div class="hud-hint">Click node to highlight &middot; Double-click to reset</div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/hydra-synth@1.3.29/dist/hydra-synth.js"></script>
   <script type="module">
     import { DataPipe } from '../data-static/data-pipe.js';
 
     // =========================================
-    // L1: HYDRA AMBIENT
+    // L1: AMBIENT GLOW CANVAS
     // =========================================
 
-    var hCanvas = document.getElementById('hydra-canvas');
-    hCanvas.width = window.innerWidth;
-    hCanvas.height = window.innerHeight;
+    var glowCanvas = document.getElementById('glow');
+    var glowCtx = glowCanvas.getContext('2d');
+    var W, H, dpr;
 
-    var hydra = new Hydra({
-      canvas: hCanvas,
-      detectAudio: false,
-      enableStreamCapture: false,
-      width: hCanvas.width,
-      height: hCanvas.height,
-    });
+    // Per-node glow state: { x, y, r, g, b, radius, intensity }
+    // We lerp these each frame for smooth transitions
+    var glowNodes = new Map();
 
-    // Smooth params
-    var hp = {
-      frequency:  { current: 4, target: 4 },
-      warmth:     { current: 0, target: 0 },
-      turbulence: { current: 0.3, target: 0.3 },
-      brightness: { current: 0.4, target: 0.4 },
-      speed:      { current: 0.15, target: 0.15 },
+    // Status -> glow color (RGB 0-255)
+    var GLOW_COLORS = {
+      idle:        { r: 60,  g: 60,  b: 60  },
+      dispatching: { r: 52,  g: 120, b: 210 },
+      executing:   { r: 46,  g: 190, b: 100 },
+      blocked:     { r: 220, g: 60,  b: 50  },
+      gated:       { r: 230, g: 150, b: 30  },
+      shipped:     { r: 40,  g: 130, b: 130 },
     };
+
+    // Status -> glow intensity (idle barely visible, blocked very visible)
+    var GLOW_INTENSITY = {
+      idle: 0.06, dispatching: 0.22, executing: 0.25,
+      blocked: 0.35, gated: 0.28, shipped: 0.15,
+    };
+
+    var GLOW_RADIUS = 140; // base radius in CSS pixels
+
+    function resizeGlow() {
+      dpr = window.devicePixelRatio || 1;
+      W = window.innerWidth;
+      H = window.innerHeight;
+      glowCanvas.width = W * dpr;
+      glowCanvas.height = H * dpr;
+      glowCanvas.style.width = W + 'px';
+      glowCanvas.style.height = H + 'px';
+      glowCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
 
     function lerp(a, b, t) { return a + (b - a) * t; }
 
-    window._freq  = function() { return hp.frequency.current; };
-    window._warm  = function() { return hp.warmth.current; };
-    window._turb  = function() { return hp.turbulence.current; };
-    window._brt   = function() { return hp.brightness.current; };
-    window._spd   = function() { return hp.speed.current; };
+    function drawGlow() {
+      glowCtx.clearRect(0, 0, W, H);
 
-    // Subdued visual — sits behind the graph
-    osc(function(){ return _freq(); }, function(){ return _spd() * 0.08; }, 0.4)
-      .color(
-        function(){ return 0.08 + _warm() * 0.4; },
-        function(){ return 0.2 - _warm() * 0.15; },
-        function(){ return 0.45 - _warm() * 0.3; }
-      )
-      .rotate(function(){ return time * _spd() * 0.03; })
-      .modulate(
-        noise(function(){ return _turb() * 6; }, function(){ return _spd() * 0.2; }),
-        function(){ return _turb() * 0.1; }
-      )
-      .brightness(function(){ return _brt() * 0.4 - 0.25; })
-      .contrast(1.2)
-      .out(o0);
+      glowNodes.forEach(function(g) {
+        if (g.intensity < 0.01) return;
 
-    noise(function(){ return 2 + _turb() * 4; }, function(){ return _spd() * 0.15; })
-      .color(function(){ return _warm() * 0.2; }, 0.06, function(){ return 0.15 * (1 - _warm()); })
-      .brightness(-0.35)
-      .out(o1);
+        var grad = glowCtx.createRadialGradient(g.x, g.y, 0, g.x, g.y, g.radius);
+        var alpha = g.intensity;
+        grad.addColorStop(0, 'rgba(' + Math.round(g.r) + ',' + Math.round(g.g) + ',' + Math.round(g.b) + ',' + alpha + ')');
+        grad.addColorStop(0.4, 'rgba(' + Math.round(g.r) + ',' + Math.round(g.g) + ',' + Math.round(g.b) + ',' + (alpha * 0.4) + ')');
+        grad.addColorStop(1, 'rgba(' + Math.round(g.r) + ',' + Math.round(g.g) + ',' + Math.round(g.b) + ',0)');
 
-    src(o0).blend(o1, 0.25).out(o2);
-    render(o2);
-
-    // Param interpolation
-    function tickHydra() {
-      for (var k in hp) hp[k].current = lerp(hp[k].current, hp[k].target, 0.025);
-      requestAnimationFrame(tickHydra);
+        glowCtx.fillStyle = grad;
+        glowCtx.fillRect(g.x - g.radius, g.y - g.radius, g.radius * 2, g.radius * 2);
+      });
     }
-    requestAnimationFrame(tickHydra);
+
+    // Update glow positions from Cytoscape node positions
+    function syncGlow() {
+      cy.nodes().forEach(function(node) {
+        var id = node.id();
+        var pos = node.renderedPosition();
+        var status = node.data('status') || (node.data('type') === 'bead' ? node.data('beadStatus') : 'idle');
+        var target = GLOW_COLORS[status] || GLOW_COLORS.idle;
+        var targetIntensity = GLOW_INTENSITY[status] || GLOW_INTENSITY.idle;
+        // Beads get smaller, dimmer glows
+        var isBead = node.data('type') === 'bead';
+        var targetRadius = isBead ? GLOW_RADIUS * 0.6 : GLOW_RADIUS;
+        targetIntensity = isBead ? targetIntensity * 0.5 : targetIntensity;
+
+        var g = glowNodes.get(id);
+        if (!g) {
+          g = { x: pos.x, y: pos.y, r: target.r, g: target.g, b: target.b, radius: targetRadius, intensity: 0 };
+          glowNodes.set(id, g);
+        }
+
+        // Smooth lerp toward targets
+        var rate = 0.08;
+        g.x = lerp(g.x, pos.x, 0.2);  // position follows faster
+        g.y = lerp(g.y, pos.y, 0.2);
+        g.r = lerp(g.r, target.r, rate);
+        g.g = lerp(g.g, target.g, rate);
+        g.b = lerp(g.b, target.b, rate);
+        g.intensity = lerp(g.intensity, targetIntensity, rate);
+        g.radius = lerp(g.radius, targetRadius, rate);
+      });
+
+      // Remove glows for removed nodes
+      glowNodes.forEach(function(_, id) {
+        if (!cy.getElementById(id).length) glowNodes.delete(id);
+      });
+    }
+
+    function animateGlow() {
+      syncGlow();
+      drawGlow();
+      requestAnimationFrame(animateGlow);
+    }
 
     // =========================================
     // L2: CYTOSCAPE GRAPH
     // =========================================
 
     var AGENT_COLORS = {
-      idle: 'rgba(100,100,100,0.6)',
-      dispatching: 'rgba(52,152,219,0.8)',
-      executing: 'rgba(46,204,113,0.8)',
-      blocked: 'rgba(231,76,60,0.8)',
-      gated: 'rgba(243,156,18,0.8)',
-      shipped: 'rgba(26,74,74,0.7)',
+      idle: '#555', dispatching: '#3498db', executing: '#2ecc71',
+      blocked: '#e74c3c', gated: '#f39c12', shipped: '#1a7a7a',
     };
-    var BEAD_COLORS = {
-      open: 'rgba(52,152,219,0.7)',
-      in_progress: 'rgba(46,204,113,0.7)',
-      blocked: 'rgba(231,76,60,0.7)',
-    };
+    var BEAD_COLORS = { open: '#3498db', in_progress: '#2ecc71', blocked: '#e74c3c' };
 
     var cy = cytoscape({
       container: document.getElementById('cy'),
@@ -210,19 +195,14 @@
           style: {
             'shape': 'ellipse',
             'label': 'data(label)',
-            'text-valign': 'bottom',
-            'text-halign': 'center',
-            'font-size': '9px',
-            'font-family': 'JetBrains Mono, monospace',
-            'color': 'rgba(255,255,255,0.4)',
+            'text-valign': 'bottom', 'text-halign': 'center',
+            'font-size': '9px', 'font-family': 'JetBrains Mono, monospace',
+            'color': 'rgba(255,255,255,0.5)',
             'text-margin-y': 6,
-            'text-outline-color': 'rgba(0,0,0,0.6)',
-            'text-outline-width': 2,
+            'text-outline-color': 'rgba(0,0,0,0.8)', 'text-outline-width': 2,
             'background-color': 'data(color)',
-            'width': 'data(size)',
-            'height': 'data(size)',
-            'border-width': 1,
-            'border-color': 'rgba(255,255,255,0.1)',
+            'width': 'data(size)', 'height': 'data(size)',
+            'border-width': 1.5, 'border-color': 'rgba(255,255,255,0.12)',
             'overlay-opacity': 0,
           },
         },
@@ -231,96 +211,64 @@
           style: {
             'shape': 'round-rectangle',
             'label': 'data(label)',
-            'text-valign': 'bottom',
-            'text-halign': 'center',
-            'font-size': '8px',
-            'font-family': 'JetBrains Mono, monospace',
-            'color': 'rgba(255,255,255,0.3)',
+            'text-valign': 'bottom', 'text-halign': 'center',
+            'font-size': '8px', 'font-family': 'JetBrains Mono, monospace',
+            'color': 'rgba(255,255,255,0.35)',
             'text-margin-y': 6,
-            'text-outline-color': 'rgba(0,0,0,0.6)',
-            'text-outline-width': 2,
+            'text-outline-color': 'rgba(0,0,0,0.8)', 'text-outline-width': 2,
             'background-color': 'data(color)',
-            'width': 'data(size)',
-            'height': 'mapData(size, 20, 40, 14, 28)',
-            'border-width': 0,
-            'overlay-opacity': 0,
+            'width': 'data(size)', 'height': 'mapData(size, 20, 40, 14, 28)',
+            'border-width': 0, 'overlay-opacity': 0,
           },
         },
         {
           selector: 'edge[type="works-on"]',
           style: {
-            'line-color': 'rgba(255,255,255,0.08)',
-            'target-arrow-color': 'rgba(255,255,255,0.08)',
+            'line-color': 'rgba(255,255,255,0.07)',
+            'target-arrow-color': 'rgba(255,255,255,0.07)',
             'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            'width': 1.5,
-            'arrow-scale': 0.7,
+            'curve-style': 'bezier', 'width': 1.5, 'arrow-scale': 0.7,
             'overlay-opacity': 0,
           },
         },
         {
           selector: 'edge[type="depends-on"]',
           style: {
-            'line-color': 'rgba(100,120,200,0.1)',
+            'line-color': 'rgba(100,120,200,0.08)',
             'line-style': 'dashed',
-            'target-arrow-color': 'rgba(100,120,200,0.1)',
+            'target-arrow-color': 'rgba(100,120,200,0.08)',
             'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            'width': 1,
-            'arrow-scale': 0.6,
+            'curve-style': 'bezier', 'width': 1, 'arrow-scale': 0.6,
             'overlay-opacity': 0,
           },
         },
-        {
-          selector: '.highlighted',
-          style: { 'opacity': 1, 'z-index': 10 },
-        },
-        {
-          selector: '.dimmed',
-          style: { 'opacity': 0.08 },
-        },
+        { selector: '.highlighted', style: { 'opacity': 1, 'z-index': 10 } },
+        { selector: '.dimmed', style: { 'opacity': 0.08 } },
         {
           selector: 'edge.highlighted[type="works-on"]',
-          style: {
-            'line-color': 'rgba(46,204,113,0.6)',
-            'target-arrow-color': 'rgba(46,204,113,0.6)',
-            'width': 2.5,
-          },
+          style: { 'line-color': 'rgba(46,204,113,0.6)', 'target-arrow-color': 'rgba(46,204,113,0.6)', 'width': 2.5 },
         },
         {
           selector: 'edge.highlighted[type="depends-on"]',
-          style: {
-            'line-color': 'rgba(74,106,219,0.5)',
-            'target-arrow-color': 'rgba(74,106,219,0.5)',
-            'width': 2,
-          },
+          style: { 'line-color': 'rgba(74,106,219,0.5)', 'target-arrow-color': 'rgba(74,106,219,0.5)', 'width': 2 },
         },
       ],
       layout: { name: 'preset' },
-      minZoom: 0.3,
-      maxZoom: 3,
-      wheelSensitivity: 0.3,
+      minZoom: 0.3, maxZoom: 3, wheelSensitivity: 0.3,
     });
 
-    // Interactions
     cy.on('tap', 'node', function(evt) {
       var node = evt.target;
       cy.elements().addClass('dimmed');
       var hood = node.neighborhood().add(node);
-      if (node.data('type') === 'bead') {
-        hood = hood.merge(node.successors()).merge(node.predecessors());
-      }
+      if (node.data('type') === 'bead') hood = hood.merge(node.successors()).merge(node.predecessors());
       hood.removeClass('dimmed').addClass('highlighted');
     });
-    cy.on('tap', function(evt) {
-      if (evt.target === cy) cy.elements().removeClass('dimmed highlighted');
-    });
-    cy.on('dbltap', function() {
-      cy.elements().removeClass('dimmed highlighted');
-    });
+    cy.on('tap', function(evt) { if (evt.target === cy) cy.elements().removeClass('dimmed highlighted'); });
+    cy.on('dbltap', function() { cy.elements().removeClass('dimmed highlighted'); });
 
     // =========================================
-    // SHARED MOCK DATA
+    // MOCK DATA
     // =========================================
 
     var SHIPS = [
@@ -346,7 +294,6 @@
 
     function wRand(w) { var r=Math.random(),a=0; for(var i=0;i<w.length;i++){a+=w[i];if(r<a)return i;} return w.length-1; }
 
-    // Stable assignments
     var ASSIGN = new Map();
     SHIPS.forEach(function(name) {
       var n = Math.random() < 0.3 ? 0 : Math.random() < 0.5 ? 1 : 2;
@@ -367,30 +314,21 @@
         agentStates.set(name, s);
         return { agent: name, status: s, beads: ASSIGN.get(name) || [] };
       });
-
       var total = agents.length;
       var active = agents.filter(function(a){return a.status!=='idle';}).length;
       var blocked = agents.filter(function(a){return a.status==='blocked';}).length;
-      var shipped = agents.filter(function(a){return a.status==='shipped';}).length;
       var qBase = 15 + 8 * Math.sin(Date.now() * 0.0001);
-
       return {
         timestamp: new Date().toISOString(),
         fleet: { total: total, active: active, agents: agents },
         queue: { total: Math.round(qBase + Math.random() * 4) },
-        beads: BEADS,
-        bead_deps: BEAD_DEPS,
-        metrics: {
-          utilization: active / total,
-          errorRate: blocked / Math.max(active, 1),
-          queuePressure: qBase / total,
-          throughput: shipped * 12,
-        },
+        beads: BEADS, bead_deps: BEAD_DEPS,
+        metrics: { utilization: active / total, errorRate: blocked / Math.max(active, 1) },
       };
     }
 
     // =========================================
-    // DATA -> BOTH LAYERS
+    // DATA -> GRAPH
     // =========================================
 
     var needsLayout = true;
@@ -399,89 +337,61 @@
 
     function applySnapshot(snap) {
       if (!snap) return;
-
-      // --- L1: Hydra params ---
       var m = snap.metrics || {};
-      hp.frequency.target = 2 + (m.throughput || 0) * 0.25;
-      hp.warmth.target = Math.min(1, (m.errorRate || 0) * 3);
-      hp.turbulence.target = 0.15 + (m.queuePressure || 0) * 0.12;
-      hp.brightness.target = 0.25 + (m.utilization || 0) * 0.4;
-      hp.speed.target = 0.08 + (m.utilization || 0) * 0.3;
 
       // State label
-      var state = (m.errorRate||0) > 0.3 ? 'critical' : (m.queuePressure||0) > 1.5 ? 'degraded' : (m.utilization||0) > 0.7 ? 'busy' : 'healthy';
+      var state = (m.errorRate||0) > 0.3 ? 'critical' : (m.utilization||0) > 0.7 ? 'busy' : 'healthy';
       var sl = document.getElementById('state-label');
       sl.textContent = state.toUpperCase();
       sl.className = 'state-label state-' + state;
 
-      // HUD metrics
+      // HUD
       document.getElementById('m-agents').textContent = String(snap.fleet.total);
       document.getElementById('m-active').textContent = String(snap.fleet.active);
       document.getElementById('m-queue').textContent = String(snap.queue.total);
       document.getElementById('m-error').textContent = Math.round((m.errorRate||0)*100) + '%';
 
-      // --- L2: Cytoscape graph ---
+      // Graph
       var newIds = new Set();
       var toAdd = [];
 
-      // Agent nodes
       snap.fleet.agents.forEach(function(agent) {
         var id = 'a-' + agent.agent.replace(/[^a-z0-9]/gi, '_');
         newIds.add(id);
         var color = AGENT_COLORS[agent.status] || AGENT_COLORS.idle;
         var sz = agent.status === 'idle' ? 18 : 28;
-
         var ex = cy.getElementById(id);
-        if (ex.length) {
-          ex.data('color', color);
-          ex.data('size', sz);
-        } else {
-          toAdd.push({ data: { id: id, label: agent.agent, type: 'agent', color: color, size: sz } });
-          needsLayout = true;
-        }
+        if (ex.length) { ex.data('color', color); ex.data('size', sz); ex.data('status', agent.status); }
+        else { toAdd.push({ data: { id: id, label: agent.agent, type: 'agent', color: color, size: sz, status: agent.status } }); needsLayout = true; }
 
         (agent.beads || []).forEach(function(bid) {
           var eid = id + '->' + bid;
-          if (!cy.getElementById(eid).length) {
-            toAdd.push({ data: { id: eid, source: id, target: bid, type: 'works-on' } });
-          }
+          if (!cy.getElementById(eid).length) toAdd.push({ data: { id: eid, source: id, target: bid, type: 'works-on' } });
         });
       });
 
-      // Bead nodes
       (snap.beads || []).forEach(function(b) {
         newIds.add(b.id);
         var color = BEAD_COLORS[b.status] || BEAD_COLORS.open;
         var sz = b.priority === 'P0' ? 38 : b.priority === 'P1' ? 28 : 20;
         var ex = cy.getElementById(b.id);
-        if (ex.length) { ex.data('color', color); ex.data('size', sz); }
-        else {
-          toAdd.push({ data: { id: b.id, label: b.id, type: 'bead', color: color, size: sz } });
-          needsLayout = true;
-        }
+        if (ex.length) { ex.data('color', color); ex.data('size', sz); ex.data('beadStatus', b.status); }
+        else { toAdd.push({ data: { id: b.id, label: b.id, type: 'bead', color: color, size: sz, beadStatus: b.status } }); needsLayout = true; }
       });
 
-      // Bead deps
       (snap.bead_deps || []).forEach(function(d) {
         var eid = 'dep-' + d[0] + '->' + d[1];
-        if (!cy.getElementById(eid).length) {
-          toAdd.push({ data: { id: eid, source: d[0], target: d[1], type: 'depends-on' } });
-        }
+        if (!cy.getElementById(eid).length) toAdd.push({ data: { id: eid, source: d[0], target: d[1], type: 'depends-on' } });
       });
 
-      // Remove gone
       lastNodeIds.forEach(function(id) {
-        if (!newIds.has(id) && cy.getElementById(id).length) {
-          cy.remove(cy.getElementById(id));
-          needsLayout = true;
-        }
+        if (!newIds.has(id) && cy.getElementById(id).length) { cy.remove(cy.getElementById(id)); needsLayout = true; }
       });
       lastNodeIds = newIds;
 
       if (toAdd.length) cy.add(toAdd);
 
       if (needsLayout) {
-        // Ensure container dimensions are current
         cy.resize();
         cy.layout({
           name: 'cose',
@@ -493,7 +403,7 @@
           edgeElasticity: function() { return 100; },
           gravity: 0.3,
           numIter: 300,
-          padding: 50,
+          padding: 60,
           nodeOverlap: 20,
           fit: true,
         }).run();
@@ -506,11 +416,8 @@
     // INIT
     // =========================================
 
-    window.addEventListener('resize', function() {
-      hCanvas.width = window.innerWidth;
-      hCanvas.height = window.innerHeight;
-      cy.resize();
-    });
+    window.addEventListener('resize', function() { resizeGlow(); cy.resize(); });
+    resizeGlow();
 
     var pipe = new DataPipe({
       generator: generateSnapshot,
@@ -519,11 +426,13 @@
     });
     pipe.subscribe(applySnapshot);
 
-    // Delay start to ensure container is sized (iframe rendering)
+    // Delay start to ensure iframe container is sized
     setTimeout(function() {
+      resizeGlow();
       cy.resize();
       pipe.start();
-    }, 500);
+      requestAnimationFrame(animateGlow);
+    }, 600);
   </script>
 </body>
 </html>
