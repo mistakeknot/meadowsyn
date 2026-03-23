@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Raster Heatmap — Agent Activity</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --fg: #ccc;
+      --dim: #555;
+      --border: #1a1a1a;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .header-title { font-size: 16px; letter-spacing: 2px; color: var(--dim); }
+    .header-stats { display: flex; gap: 20px; font-size: 12px; }
+    .stat-label { color: var(--dim); text-transform: uppercase; font-size: 10px; }
+    .stat-value { margin-top: 2px; }
+
+    .grid-container {
+      flex: 1;
+      display: flex;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .y-labels {
+      width: 130px;
+      flex-shrink: 0;
+      padding: 8px 8px 30px 12px;
+      overflow: hidden;
+    }
+    .y-label {
+      font-size: 11px;
+      color: var(--dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+      padding: 0 4px;
+      transition: color 0.2s;
+    }
+    .y-label:hover { color: var(--fg); }
+    .y-label.active { color: #2ecc71; }
+
+    .canvas-wrap {
+      flex: 1;
+      position: relative;
+    }
+    canvas {
+      display: block;
+      image-rendering: pixelated;
+    }
+    .x-labels {
+      position: absolute;
+      bottom: 0;
+      left: 130px;
+      right: 0;
+      height: 24px;
+      display: flex;
+      justify-content: space-between;
+      padding: 0 4px;
+      font-size: 10px;
+      color: var(--dim);
+    }
+
+    .tooltip {
+      position: absolute;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      padding: 6px 10px;
+      font-size: 11px;
+      pointer-events: none;
+      display: none;
+      z-index: 10;
+      white-space: nowrap;
+    }
+    .tooltip .t-agent { color: var(--fg); font-weight: 700; }
+    .tooltip .t-status { margin-top: 2px; }
+    .tooltip .t-time { color: var(--dim); margin-top: 2px; }
+
+    .legend {
+      display: flex;
+      gap: 12px;
+      font-size: 11px;
+      align-items: center;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title">RASTER HEATMAP</div>
+    <div class="legend">
+      <div class="legend-item"><span class="legend-swatch" style="background:#1a1a1a;border:1px solid #333"></span> Idle</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#1e3a5f"></span> Dispatch</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#1a4a2a"></span> Execute</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#5f1a1a"></span> Blocked</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#4a3a1a"></span> Gated</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#1a4a4a"></span> Shipped</div>
+    </div>
+    <div class="header-stats">
+      <div><div class="stat-label">Columns</div><div class="stat-value" id="stat-cols">0</div></div>
+      <div><div class="stat-label">Agents</div><div class="stat-value" id="stat-agents">0</div></div>
+      <div><div class="stat-label">Data</div><div class="stat-value" id="stat-source">MOCK</div></div>
+    </div>
+  </div>
+
+  <div class="grid-container">
+    <div class="y-labels" id="y-labels"></div>
+    <div class="canvas-wrap">
+      <canvas id="heatmap"></canvas>
+    </div>
+    <div class="tooltip" id="tooltip">
+      <div class="t-agent" id="tip-agent"></div>
+      <div class="t-status" id="tip-status"></div>
+      <div class="t-time" id="tip-time"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { DataPipe } from '../data-static/data-pipe.js';
+
+    // --- Config ---
+    const MAX_COLS = 120;       // max time columns visible (10 min at 5s intervals)
+    const CELL_PAD = 1;         // gap between cells
+    const SORT_INTERVAL = 30;   // re-sort every N snapshots
+
+    // Status -> color mapping
+    const STATUS_COLORS = {
+      idle:        '#1a1a1a',
+      dispatching: '#1e3a5f',
+      executing:   '#1a4a2a',
+      blocked:     '#5f1a1a',
+      gated:       '#4a3a1a',
+      shipped:     '#1a4a4a',
+    };
+
+    // --- State ---
+    // history[agentName] = [{ status, timestamp }, ...]  (ring buffer per agent, newest at end)
+    const agentHistory = new Map();
+    let agentOrder = [];     // sorted agent names
+    let snapshotTimes = [];  // timestamps for columns
+    let selectedAgent = null;
+    let snapCount = 0;
+
+    // --- Mock Data ---
+    const SHIPS = [
+      'Mistake Not...', 'Grey Area', 'Falling Outside', 'Sleeper Service',
+      'Just Read The Instructions', 'Of Course I Still Love You',
+      'So Much For Subtlety', 'Very Little Gravitas Indeed',
+      'Gravitas Shortfall', 'Honest Mistake',
+      'No More Mr Nice Guy', 'Quietly Confident', 'Sense Amid Madness',
+      'Profit Margin', 'Limiting Factor', 'Conflict Of Evidence',
+      'Zero Credibility', 'Funny It Worked', 'Just Testing',
+      'A Ship With A View',
+    ];
+    const STATUSES = ['idle', 'dispatching', 'executing', 'blocked', 'gated', 'shipped'];
+    const STATUS_WEIGHTS = [0.40, 0.12, 0.28, 0.05, 0.08, 0.07];
+
+    function weightedRandom(weights) {
+      const r = Math.random();
+      let acc = 0;
+      for (let i = 0; i < weights.length; i++) { acc += weights[i]; if (r < acc) return i; }
+      return weights.length - 1;
+    }
+
+    // Per-agent state machines for continuity
+    const agentStates = new Map();
+    function mockAgentStatus(name) {
+      let current = agentStates.get(name) || 'idle';
+      // 80% chance to stay in current state, 20% to transition
+      if (Math.random() < 0.2) {
+        current = STATUSES[weightedRandom(STATUS_WEIGHTS)];
+      }
+      agentStates.set(name, current);
+      return current;
+    }
+
+    function generateMockSnapshot() {
+      const agents = SHIPS.map(name => ({
+        agent: name,
+        session: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        status: mockAgentStatus(name),
+      }));
+      return {
+        timestamp: new Date().toISOString(),
+        fleet: { total: agents.length, active: agents.filter(a => a.status !== 'idle').length, agents },
+        wip: agents.filter(a => a.status !== 'idle'),
+        roster: agents.map(a => ({ session: a.session, project: 'demarch', terminal: 'mock', agent: 'claude', live: true })),
+      };
+    }
+
+    // --- Data Processing ---
+
+    function processSnapshot(snap) {
+      if (!snap?.fleet?.agents) return;
+      snapCount++;
+      const ts = snap.timestamp || new Date().toISOString();
+
+      snapshotTimes.push(ts);
+      if (snapshotTimes.length > MAX_COLS) snapshotTimes.shift();
+
+      for (const agent of snap.fleet.agents) {
+        const name = agent.agent || agent.session || '?';
+        if (!agentHistory.has(name)) agentHistory.set(name, []);
+        const hist = agentHistory.get(name);
+        hist.push({ status: agent.status || 'idle', timestamp: ts });
+        if (hist.length > MAX_COLS) hist.shift();
+      }
+
+      // Sort by activity every N snapshots
+      if (snapCount % SORT_INTERVAL === 0 || agentOrder.length === 0) {
+        sortAgents();
+      }
+
+      // Ensure all agents are in the order list
+      for (const name of agentHistory.keys()) {
+        if (!agentOrder.includes(name)) agentOrder.push(name);
+      }
+
+      updateLabels();
+      drawHeatmap();
+    }
+
+    function sortAgents() {
+      const scores = new Map();
+      for (const [name, hist] of agentHistory) {
+        const active = hist.filter(h => h.status !== 'idle').length;
+        scores.set(name, active);
+      }
+      agentOrder = [...agentHistory.keys()].sort((a, b) => (scores.get(b) || 0) - (scores.get(a) || 0));
+    }
+
+    // --- Canvas Rendering ---
+
+    const canvas = document.getElementById('heatmap');
+    const ctx = canvas.getContext('2d');
+    let cellW, cellH;
+
+    function resizeCanvas() {
+      const wrap = canvas.parentElement;
+      const rect = wrap.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = (rect.height - 24) * dpr; // leave room for x-axis
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = (rect.height - 24) + 'px';
+      ctx.scale(dpr, dpr);
+      drawHeatmap();
+    }
+
+    function drawHeatmap() {
+      const rows = agentOrder.length;
+      const cols = snapshotTimes.length;
+      if (rows === 0 || cols === 0) return;
+
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+
+      cellW = (w - CELL_PAD) / Math.max(cols, 1);
+      cellH = (h - CELL_PAD) / Math.max(rows, 1);
+
+      ctx.clearRect(0, 0, w, h);
+
+      for (let row = 0; row < rows; row++) {
+        const name = agentOrder[row];
+        const hist = agentHistory.get(name) || [];
+        const offset = Math.max(0, cols - hist.length);
+
+        for (let col = 0; col < hist.length; col++) {
+          const entry = hist[col];
+          const color = STATUS_COLORS[entry.status] || STATUS_COLORS.idle;
+
+          const x = (offset + col) * cellW + CELL_PAD;
+          const y = row * cellH + CELL_PAD;
+
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, cellW - CELL_PAD, cellH - CELL_PAD);
+        }
+
+        // Highlight selected row
+        if (name === selectedAgent) {
+          ctx.strokeStyle = '#2ecc71';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(CELL_PAD, row * cellH + CELL_PAD, w - CELL_PAD * 2, cellH - CELL_PAD);
+        }
+      }
+
+      // Update stats
+      document.getElementById('stat-cols').textContent = String(cols);
+      document.getElementById('stat-agents').textContent = String(rows);
+    }
+
+    // --- Y-axis Labels ---
+
+    const yLabelsEl = document.getElementById('y-labels');
+
+    function updateLabels() {
+      const existing = yLabelsEl.children.length;
+      const needed = agentOrder.length;
+
+      // Resize label container to match cell heights
+      for (let i = 0; i < needed; i++) {
+        let label;
+        if (i < existing) {
+          label = yLabelsEl.children[i];
+        } else {
+          label = document.createElement('div');
+          label.className = 'y-label';
+          label.addEventListener('click', () => {
+            const name = label.dataset.agent;
+            selectedAgent = selectedAgent === name ? null : name;
+            updateLabelHighlights();
+            drawHeatmap();
+          });
+          yLabelsEl.appendChild(label);
+        }
+        const name = agentOrder[i];
+        label.textContent = name.length > 14 ? name.slice(0, 14) : name;
+        label.dataset.agent = name;
+        label.title = name;
+
+        // Match cell height
+        const h = canvas.clientHeight / Math.max(agentOrder.length, 1);
+        label.style.height = h + 'px';
+        label.style.lineHeight = h + 'px';
+      }
+      // Remove excess
+      while (yLabelsEl.children.length > needed) {
+        yLabelsEl.removeChild(yLabelsEl.lastChild);
+      }
+      updateLabelHighlights();
+    }
+
+    function updateLabelHighlights() {
+      for (const label of yLabelsEl.children) {
+        label.classList.toggle('active', label.dataset.agent === selectedAgent);
+      }
+    }
+
+    // --- Tooltip ---
+
+    const tooltip = document.getElementById('tooltip');
+    const tipAgent = document.getElementById('tip-agent');
+    const tipStatus = document.getElementById('tip-status');
+    const tipTime = document.getElementById('tip-time');
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      const col = Math.floor(mx / cellW);
+      const row = Math.floor(my / cellH);
+
+      if (row < 0 || row >= agentOrder.length || col < 0 || col >= snapshotTimes.length) {
+        tooltip.style.display = 'none';
+        return;
+      }
+
+      const name = agentOrder[row];
+      const hist = agentHistory.get(name) || [];
+      const offset = Math.max(0, snapshotTimes.length - hist.length);
+      const idx = col - offset;
+
+      if (idx < 0 || idx >= hist.length) {
+        tooltip.style.display = 'none';
+        return;
+      }
+
+      const entry = hist[idx];
+      tipAgent.textContent = name;
+      tipStatus.textContent = entry.status.toUpperCase();
+      tipStatus.style.color = entry.status === 'blocked' ? '#e74c3c'
+        : entry.status === 'executing' ? '#2ecc71'
+        : entry.status === 'gated' ? '#f39c12'
+        : '#ccc';
+
+      const time = new Date(entry.timestamp);
+      tipTime.textContent = time.toLocaleTimeString();
+
+      // Position tooltip
+      tooltip.style.display = 'block';
+      const tx = e.clientX + 12;
+      const ty = e.clientY - 40;
+      tooltip.style.left = tx + 'px';
+      tooltip.style.top = ty + 'px';
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+    });
+
+    // Click row to select
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const my = e.clientY - rect.top;
+      const row = Math.floor(my / cellH);
+      if (row >= 0 && row < agentOrder.length) {
+        const name = agentOrder[row];
+        selectedAgent = selectedAgent === name ? null : name;
+        updateLabelHighlights();
+        drawHeatmap();
+      }
+    });
+
+    // --- Init ---
+
+    const pipe = new DataPipe({
+      generator: () => generateMockSnapshot(),
+      interval: 2000,
+      bufferSize: MAX_COLS,
+    });
+
+    pipe.subscribe(snap => processSnapshot(snap));
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+    pipe.start();
+  </script>
+</body>
+</html>
