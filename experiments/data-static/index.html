@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DataPipe Test Harness</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --fg: #ccc;
+      --dim: #666;
+      --ok: #2ecc71;
+      --warn: #f39c12;
+      --err: #e74c3c;
+      --border: #1a1a1a;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      padding: 24px;
+    }
+    h1 { font-size: 16px; letter-spacing: 2px; color: var(--dim); margin-bottom: 16px; }
+
+    .status-bar {
+      display: flex;
+      gap: 24px;
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      margin-bottom: 16px;
+      align-items: center;
+    }
+    .status-bar .label { color: var(--dim); font-size: 11px; text-transform: uppercase; }
+    .status-bar .value { font-size: 14px; margin-top: 2px; }
+    .status-bar .indicator {
+      width: 10px; height: 10px; border-radius: 50%;
+      display: inline-block; margin-right: 6px;
+    }
+    .indicator.ok { background: var(--ok); }
+    .indicator.stale { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
+    .indicator.dead { background: var(--err); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .controls {
+      display: flex; gap: 12px; margin-bottom: 16px;
+    }
+    button {
+      background: #1a1a1a; color: var(--fg); border: 1px solid #333;
+      padding: 6px 14px; font-family: inherit; font-size: 12px; cursor: pointer;
+    }
+    button:hover { background: #222; }
+    button.active { border-color: var(--ok); color: var(--ok); }
+
+    .panels { display: flex; gap: 16px; }
+    .panel {
+      flex: 1;
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 8px 12px;
+      background: #111;
+      border-bottom: 1px solid var(--border);
+      color: var(--dim);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .panel-body {
+      padding: 12px;
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .json-key { color: #7aa2f7; }
+    .json-str { color: #9ece6a; }
+    .json-num { color: #ff9e64; }
+    .json-bool { color: #bb9af7; }
+    .json-null { color: var(--dim); }
+    .event-log .entry {
+      padding: 4px 0;
+      border-bottom: 1px solid #111;
+      font-size: 12px;
+    }
+    .entry .time { color: var(--dim); margin-right: 8px; }
+  </style>
+</head>
+<body>
+  <h1>DATAPIPE TEST HARNESS</h1>
+
+  <div class="status-bar">
+    <div>
+      <div class="label">Status</div>
+      <div class="value"><span id="indicator" class="indicator dead"></span><span id="pipe-status">WAITING</span></div>
+    </div>
+    <div>
+      <div class="label">Snapshots</div>
+      <div class="value" id="snap-count">0</div>
+    </div>
+    <div>
+      <div class="label">Buffer</div>
+      <div class="value" id="buf-size">0 / 720</div>
+    </div>
+    <div>
+      <div class="label">Last Update</div>
+      <div class="value" id="last-update">&mdash;</div>
+    </div>
+    <div>
+      <div class="label">Source</div>
+      <div class="value" id="data-source">&mdash;</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="btn-start" class="active">START</button>
+    <button id="btn-stop">STOP</button>
+    <button id="btn-clear-log">CLEAR LOG</button>
+    <button id="btn-mode-url">URL MODE</button>
+    <button id="btn-mode-mock" class="active">MOCK MODE</button>
+  </div>
+
+  <div class="panels">
+    <div class="panel" style="flex: 2;">
+      <div class="panel-header">Latest Snapshot</div>
+      <div class="panel-body"><pre id="json-view">Waiting for data...</pre></div>
+    </div>
+    <div class="panel" style="flex: 1;">
+      <div class="panel-header">Event Log</div>
+      <div class="panel-body event-log" id="event-log"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { DataPipe } from './data-pipe.js';
+
+    // --- Mock data generator (Culture ship names) ---
+    const SHIPS = [
+      'Mistake Not...', 'Grey Area', 'Falling Outside', 'Sleeper Service',
+      'Just Read The Instructions', 'Of Course I Still Love You',
+      'So Much For Subtlety', 'Very Little Gravitas Indeed',
+      'Experiencing A Significant Gravitas Shortfall', 'Honest Mistake',
+      'No More Mr Nice Guy', 'Quietly Confident', 'Sense Amid Madness',
+      'Profit Margin', 'Limiting Factor', 'Unfortunate Conflict Of Evidence',
+      'Zero Credibility', 'Funny It Worked Last Time', 'Just Testing',
+      'A Ship With A View',
+    ];
+    const STATUSES = ['idle', 'dispatching', 'executing', 'blocked', 'gated', 'shipped'];
+    const STATUS_WEIGHTS = [0.45, 0.12, 0.25, 0.05, 0.08, 0.05];
+
+    function weightedRandom(weights) {
+      const r = Math.random();
+      let acc = 0;
+      for (let i = 0; i < weights.length; i++) {
+        acc += weights[i];
+        if (r < acc) return i;
+      }
+      return weights.length - 1;
+    }
+
+    let mockTick = 0;
+    function generateMockSnapshot() {
+      mockTick++;
+      const t = Date.now();
+      const agents = SHIPS.map((name, i) => ({
+        session: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        agent: name,
+        status: STATUSES[weightedRandom(STATUS_WEIGHTS)],
+        bead_id: `Demarch-${(1000 + i).toString(36)}`,
+        title: `Mock task ${i + 1}`,
+        age: Math.floor(Math.random() * 3600),
+      }));
+
+      const queueBase = 20 + 10 * Math.sin(mockTick * 0.1);
+      return {
+        timestamp: new Date(t).toISOString(),
+        fleet: {
+          total: agents.length,
+          active: agents.filter(a => a.status !== 'idle').length,
+          agents,
+        },
+        queue: {
+          total: Math.round(queueBase + Math.random() * 5),
+          by_priority: { P0: 2, P1: Math.round(queueBase * 0.4), P2: Math.round(queueBase * 0.6) },
+        },
+        wip: agents.filter(a => a.status === 'executing' || a.status === 'dispatching'),
+        roster: agents.map(a => ({ session: a.session, project: 'demarch', terminal: 'mock', agent: 'claude', live: true })),
+        meta: { roster_total: agents.length, join_coverage: 100 },
+      };
+    }
+
+    // --- Safe DOM helpers ---
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.textContent;  // identity for textContent, but safe pattern
+    }
+
+    function addLogEntry(msg) {
+      const entry = document.createElement('div');
+      entry.className = 'entry';
+
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'time';
+      timeSpan.textContent = new Date().toLocaleTimeString();
+
+      const textSpan = document.createElement('span');
+      textSpan.textContent = msg;
+
+      entry.appendChild(timeSpan);
+      entry.appendChild(textSpan);
+      elLog.prepend(entry);
+
+      // Keep log bounded
+      while (elLog.children.length > 200) elLog.removeChild(elLog.lastChild);
+    }
+
+    function renderJson(obj) {
+      // Safe: JSON.stringify produces deterministic output, no user-controlled HTML
+      const json = JSON.stringify(obj, null, 2);
+      elJson.textContent = json;
+    }
+
+    function renderSnapshot(snap) {
+      const display = {
+        timestamp: snap.timestamp,
+        fleet: { total: snap.fleet?.total, active: snap.fleet?.active },
+        queue: snap.queue,
+        wip_count: snap.wip?.length || 0,
+        roster_count: snap.roster?.length || 0,
+        meta: snap.meta,
+        _first_agent: snap.fleet?.agents?.[0],
+      };
+      renderJson(display);
+    }
+
+    // --- UI wiring ---
+
+    let pipe = null;
+    let mode = 'mock';
+
+    const elStatus = document.getElementById('pipe-status');
+    const elIndicator = document.getElementById('indicator');
+    const elCount = document.getElementById('snap-count');
+    const elBuf = document.getElementById('buf-size');
+    const elLastUpdate = document.getElementById('last-update');
+    const elSource = document.getElementById('data-source');
+    const elJson = document.getElementById('json-view');
+    const elLog = document.getElementById('event-log');
+
+    function updateStatusBar() {
+      if (!pipe) return;
+      elCount.textContent = String(pipe.snapshotCount);
+      const history = pipe.getHistory();
+      elBuf.textContent = `${history.length} / ${pipe._bufferSize}`;
+
+      if (pipe.isStale()) {
+        elStatus.textContent = 'STALE';
+        elIndicator.className = 'indicator stale';
+      } else if (pipe.getLatest()) {
+        elStatus.textContent = 'LIVE';
+        elIndicator.className = 'indicator ok';
+      }
+    }
+
+    function createPipe() {
+      if (pipe) pipe.stop();
+      const opts = { interval: 2000, bufferSize: 720 };
+      if (mode === 'mock') {
+        opts.generator = () => generateMockSnapshot();
+      } else {
+        opts.url = 'snapshot.json';
+        opts.generator = async () => {
+          try {
+            const res = await fetch('mock-snapshot.json', { cache: 'no-store' });
+            if (res.ok) return await res.json();
+          } catch { /* fallback exhausted */ }
+          return null;
+        };
+      }
+      pipe = new DataPipe(opts);
+      pipe.subscribe(snap => {
+        renderSnapshot(snap);
+        elLastUpdate.textContent = new Date().toLocaleTimeString();
+        addLogEntry(`Snapshot #${pipe.snapshotCount} received`);
+        updateStatusBar();
+      });
+      elSource.textContent = mode.toUpperCase();
+      addLogEntry(`Pipe created in ${mode} mode`);
+    }
+
+    // Button handlers
+    document.getElementById('btn-start').addEventListener('click', () => {
+      if (!pipe) createPipe();
+      pipe.start();
+      addLogEntry('Pipe started');
+      document.getElementById('btn-start').classList.add('active');
+      document.getElementById('btn-stop').classList.remove('active');
+    });
+
+    document.getElementById('btn-stop').addEventListener('click', () => {
+      if (pipe) { pipe.stop(); addLogEntry('Pipe stopped'); }
+      document.getElementById('btn-stop').classList.add('active');
+      document.getElementById('btn-start').classList.remove('active');
+    });
+
+    document.getElementById('btn-clear-log').addEventListener('click', () => {
+      elLog.replaceChildren();
+    });
+
+    document.getElementById('btn-mode-mock').addEventListener('click', () => {
+      mode = 'mock';
+      document.getElementById('btn-mode-mock').classList.add('active');
+      document.getElementById('btn-mode-url').classList.remove('active');
+      createPipe();
+      pipe.start();
+      addLogEntry('Switched to MOCK mode');
+    });
+
+    document.getElementById('btn-mode-url').addEventListener('click', () => {
+      mode = 'url';
+      document.getElementById('btn-mode-url').classList.add('active');
+      document.getElementById('btn-mode-mock').classList.remove('active');
+      createPipe();
+      pipe.start();
+      addLogEntry('Switched to URL mode');
+    });
+
+    // Auto-start in mock mode
+    createPipe();
+    pipe.start();
+
+    // Stale check ticker
+    setInterval(updateStatusBar, 1000);
+  </script>
+</body>
+</html>
