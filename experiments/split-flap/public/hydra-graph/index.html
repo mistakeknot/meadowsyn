@@ -395,6 +395,7 @@
     // =========================================
 
     var needsLayout = true;
+    var firstLayout = true;
     var lastNodeIds = new Set();
 
     function applySnapshot(snap) {
@@ -483,17 +484,18 @@
       if (needsLayout) {
         cy.layout({
           name: 'fcose',
-          animate: true,
+          animate: !firstLayout,
           animationDuration: 800,
-          randomize: cy.nodes().length < 5,
-          nodeRepulsion: 5500,
-          idealEdgeLength: 90,
-          edgeElasticity: 0.08,
-          gravity: 0.25,
-          gravityRange: 3.5,
-          nodeSeparation: 75,
+          randomize: true,
+          nodeRepulsion: 6000,
+          idealEdgeLength: 100,
+          edgeElasticity: 0.1,
+          gravity: 0.3,
+          gravityRange: 3.8,
+          nodeSeparation: 80,
         }).run();
         needsLayout = false;
+        firstLayout = false;
       }
     }
 
