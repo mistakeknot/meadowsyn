@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Process Replay</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --fg: #ccc;
+      --dim: #444;
+      --border: #1a1a1a;
+      --p0: #e74c3c;
+      --p1: #f39c12;
+      --p2: #3498db;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .header-title { font-size: 16px; letter-spacing: 2px; color: var(--dim); }
+    .header-stats { display: flex; gap: 20px; font-size: 12px; }
+    .stat-label { color: var(--dim); text-transform: uppercase; font-size: 10px; }
+    .stat-value { margin-top: 2px; }
+
+    .main { flex: 1; display: flex; overflow: hidden; }
+
+    .lanes-area {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    .lane-labels {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .lane-label {
+      position: absolute;
+      left: 0;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--dim);
+      padding: 4px 12px;
+      background: rgba(10,10,10,0.7);
+    }
+    .lane-divider {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      height: 1px;
+      background: var(--border);
+    }
+    canvas#replay-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .event-sidebar {
+      width: 260px;
+      border-left: 1px solid var(--border);
+      overflow-y: auto;
+      flex-shrink: 0;
+      padding: 8px;
+    }
+    .event-sidebar-header {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: var(--dim);
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 4px;
+      letter-spacing: 1px;
+    }
+    .event-entry {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-bottom: 1px solid #111;
+    }
+    .event-entry .ev-time { color: var(--dim); margin-right: 6px; }
+    .event-entry .ev-bead { font-weight: 700; }
+    .event-entry.ev-ship .ev-bead { color: #2ecc71; }
+    .event-entry.ev-rework .ev-bead { color: #e74c3c; }
+    .event-entry.ev-advance .ev-bead { color: #3498db; }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 24px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    button {
+      background: #1a1a1a; color: var(--fg); border: 1px solid #333;
+      padding: 5px 12px; font-family: inherit; font-size: 12px; cursor: pointer;
+      min-width: 40px;
+    }
+    button:hover { background: #222; }
+    button.active { border-color: #2ecc71; color: #2ecc71; }
+    .scrub-bar {
+      flex: 1;
+      height: 4px;
+      background: #1a1a1a;
+      border-radius: 2px;
+      position: relative;
+      cursor: pointer;
+    }
+    .scrub-fill {
+      height: 100%;
+      background: #333;
+      border-radius: 2px;
+      pointer-events: none;
+    }
+    .scrub-head {
+      position: absolute;
+      top: -4px;
+      width: 12px; height: 12px;
+      background: var(--fg);
+      border-radius: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .time-display {
+      font-size: 12px;
+      color: var(--dim);
+      min-width: 50px;
+      text-align: center;
+    }
+    .speed-display {
+      font-size: 11px;
+      color: var(--dim);
+      min-width: 30px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title">PROCESS REPLAY</div>
+    <div class="header-stats">
+      <div><div class="stat-label">Tokens</div><div class="stat-value" id="stat-tokens">0</div></div>
+      <div><div class="stat-label">Shipped</div><div class="stat-value" id="stat-shipped">0</div></div>
+      <div><div class="stat-label">Reworked</div><div class="stat-value" id="stat-reworked">0</div></div>
+      <div><div class="stat-label">Events</div><div class="stat-value" id="stat-events">0</div></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="lanes-area">
+      <canvas id="replay-canvas"></canvas>
+      <div class="lane-labels" id="lane-labels"></div>
+    </div>
+    <div class="event-sidebar">
+      <div class="event-sidebar-header">Event Log</div>
+      <div id="event-log"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="btn-play" class="active">&#9654;</button>
+    <button id="btn-pause">&#9646;&#9646;</button>
+    <button id="btn-speed">1x</button>
+    <div class="time-display" id="time-display">0:00</div>
+    <div class="scrub-bar" id="scrub-bar">
+      <div class="scrub-fill" id="scrub-fill"></div>
+      <div class="scrub-head" id="scrub-head"></div>
+    </div>
+    <div class="speed-display" id="speed-label">1x</div>
+  </div>
+
+  <script type="module">
+    import { DataPipe } from '../data-static/data-pipe.js';
+
+    // --- Lane definitions ---
+    const LANES = ['Backlog', 'Claimed', 'Dispatched', 'Executing', 'Gated', 'Shipped'];
+    const LANE_MAP = { backlog: 0, claimed: 1, dispatching: 2, executing: 3, gated: 4, shipped: 5 };
+
+    // Priority colors
+    const PRIO_COLORS = { P0: '#e74c3c', P1: '#f39c12', P2: '#3498db' };
+
+    // --- State ---
+    const events = [];        // recorded events: { time, beadId, fromLane, toLane, priority }
+    let tokens = new Map();   // beadId -> { lane, priority, x, y, targetX, targetY, age, born }
+    let playheadTime = 0;     // current playback time in ms
+    let maxTime = 0;
+    let playing = true;
+    let speedIdx = 0;
+    const SPEEDS = [1, 2, 5, 10];
+    let shippedCount = 0;
+    let reworkedCount = 0;
+
+    // --- Canvas setup ---
+    const canvas = document.getElementById('replay-canvas');
+    const ctx = canvas.getContext('2d');
+    let W, H, laneHeight, laneWidth;
+
+    function resize() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      W = rect.width;
+      H = rect.height;
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      laneHeight = H / LANES.length;
+      laneWidth = W;
+      updateLaneLabels();
+    }
+
+    function updateLaneLabels() {
+      const container = document.getElementById('lane-labels');
+      container.replaceChildren();
+      for (let i = 0; i < LANES.length; i++) {
+        const label = document.createElement('div');
+        label.className = 'lane-label';
+        label.textContent = LANES[i];
+        label.style.top = (i * laneHeight + 2) + 'px';
+        container.appendChild(label);
+
+        if (i > 0) {
+          const divider = document.createElement('div');
+          divider.className = 'lane-divider';
+          divider.style.top = (i * laneHeight) + 'px';
+          container.appendChild(divider);
+        }
+      }
+    }
+
+    // --- Mock event generation ---
+    const SHIPS = [
+      'Mistake Not', 'Grey Area', 'Falling Outside', 'Sleeper Service',
+      'Just Read Instr.', 'Still Love You', 'So Much Subtlety', 'No Gravitas',
+    ];
+    const MOCK_BEADS = Array.from({ length: 20 }, (_, i) => ({
+      id: `Demarch-${(1000 + i).toString(36)}`,
+      title: `Task ${i + 1}`,
+      priority: i < 3 ? 'P0' : i < 10 ? 'P1' : 'P2',
+    }));
+
+    let mockTime = 0;
+    function generateMockEvents() {
+      // Generate a batch of events representing 5 seconds of factory activity
+      const batch = [];
+      const dt = 5000;
+      mockTime += dt;
+
+      for (const bead of MOCK_BEADS) {
+        const token = tokens.get(bead.id);
+        const currentLane = token ? token.lane : -1;
+
+        // Probabilistic state transitions
+        const r = Math.random();
+        if (currentLane === -1 && r < 0.15) {
+          // Enter backlog
+          batch.push({ time: mockTime, beadId: bead.id, toLane: 0, priority: bead.priority });
+        } else if (currentLane >= 0 && currentLane < 4 && r < 0.2) {
+          // Advance one lane
+          batch.push({ time: mockTime, beadId: bead.id, fromLane: currentLane, toLane: currentLane + 1, priority: bead.priority });
+        } else if (currentLane === 4 && r < 0.3) {
+          // Gate decision: ship or rework
+          if (Math.random() < 0.75) {
+            batch.push({ time: mockTime, beadId: bead.id, fromLane: 4, toLane: 5, priority: bead.priority });
+          } else {
+            batch.push({ time: mockTime, beadId: bead.id, fromLane: 4, toLane: 0, priority: bead.priority, rework: true });
+          }
+        } else if (currentLane === 5 && r < 0.1) {
+          // Exit shipped (remove token)
+          tokens.delete(bead.id);
+        }
+      }
+
+      return batch;
+    }
+
+    // --- Event recording from DataPipe ---
+
+    function recordSnapshot(snap) {
+      if (!snap) return;
+      const newEvents = generateMockEvents();
+      for (const ev of newEvents) {
+        events.push(ev);
+        maxTime = Math.max(maxTime, ev.time);
+      }
+    }
+
+    // --- Playback ---
+
+    function applyEvent(ev) {
+      let token = tokens.get(ev.beadId);
+      if (!token) {
+        token = {
+          lane: ev.toLane,
+          priority: ev.priority || 'P2',
+          x: 0, y: 0,
+          targetX: 0, targetY: 0,
+          age: 0,
+          born: ev.time,
+        };
+        tokens.set(ev.beadId, token);
+      }
+
+      token.lane = ev.toLane;
+
+      if (ev.toLane === 5) shippedCount++;
+      if (ev.rework) reworkedCount++;
+
+      // Log event
+      logEvent(ev);
+    }
+
+    function logEvent(ev) {
+      const log = document.getElementById('event-log');
+      const entry = document.createElement('div');
+      entry.className = `event-entry ${ev.rework ? 'ev-rework' : ev.toLane === 5 ? 'ev-ship' : 'ev-advance'}`;
+
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'ev-time';
+      timeSpan.textContent = formatTime(ev.time);
+
+      const beadSpan = document.createElement('span');
+      beadSpan.className = 'ev-bead';
+      beadSpan.textContent = ev.beadId;
+
+      const arrow = document.createTextNode(
+        ev.rework ? ' ↩ rework' : ` → ${LANES[ev.toLane]}`
+      );
+
+      entry.appendChild(timeSpan);
+      entry.appendChild(beadSpan);
+      entry.appendChild(arrow);
+      log.prepend(entry);
+
+      while (log.children.length > 100) log.removeChild(log.lastChild);
+    }
+
+    function formatTime(ms) {
+      const s = Math.floor(ms / 1000);
+      const m = Math.floor(s / 60);
+      return `${m}:${String(s % 60).padStart(2, '0')}`;
+    }
+
+    // --- Rendering ---
+
+    function drawTokens() {
+      ctx.clearRect(0, 0, W, H);
+
+      // Draw lane backgrounds
+      for (let i = 0; i < LANES.length; i++) {
+        ctx.fillStyle = i % 2 === 0 ? '#0c0c0c' : '#0a0a0a';
+        ctx.fillRect(0, i * laneHeight, W, laneHeight);
+      }
+
+      // Draw tokens
+      const laneSlots = new Map(); // lane -> count (for horizontal spacing)
+      for (const [beadId, token] of tokens) {
+        const lane = token.lane;
+        if (lane < 0 || lane >= LANES.length) continue;
+
+        const count = (laneSlots.get(lane) || 0);
+        laneSlots.set(lane, count + 1);
+
+        // Target position
+        const margin = 90; // space for lane labels
+        token.targetX = margin + (count % 15) * 30 + 15;
+        token.targetY = lane * laneHeight + laneHeight / 2 + Math.floor(count / 15) * 20 - 10;
+
+        // Smooth interpolation
+        token.x = token.x === 0 ? token.targetX : token.x + (token.targetX - token.x) * 0.15;
+        token.y = token.y === 0 ? token.targetY : token.y + (token.targetY - token.y) * 0.15;
+
+        // Size based on age
+        token.age = (playheadTime - token.born) / 1000;
+        const baseSize = 6;
+        const ageSize = Math.min(baseSize + token.age * 0.05, 12);
+
+        // Draw
+        ctx.beginPath();
+        ctx.arc(token.x, token.y, ageSize, 0, Math.PI * 2);
+        ctx.fillStyle = PRIO_COLORS[token.priority] || PRIO_COLORS.P2;
+        ctx.globalAlpha = 0.85;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // --- Playback controls ---
+
+    let eventIdx = 0;  // next event to apply
+
+    function tick() {
+      if (playing && events.length > 0) {
+        const speed = SPEEDS[speedIdx];
+        playheadTime += 50 * speed;  // advance by frame * speed
+
+        // Apply any events up to playheadTime
+        while (eventIdx < events.length && events[eventIdx].time <= playheadTime) {
+          applyEvent(events[eventIdx]);
+          eventIdx++;
+        }
+      }
+
+      drawTokens();
+      updateScrubBar();
+      updateStats();
+
+      requestAnimationFrame(tick);
+    }
+
+    function updateScrubBar() {
+      if (maxTime <= 0) return;
+      const pct = Math.min(playheadTime / maxTime, 1);
+      document.getElementById('scrub-fill').style.width = (pct * 100) + '%';
+      document.getElementById('scrub-head').style.left = (pct * 100) + '%';
+      document.getElementById('time-display').textContent = formatTime(playheadTime);
+    }
+
+    function updateStats() {
+      document.getElementById('stat-tokens').textContent = String(tokens.size);
+      document.getElementById('stat-shipped').textContent = String(shippedCount);
+      document.getElementById('stat-reworked').textContent = String(reworkedCount);
+      document.getElementById('stat-events').textContent = String(events.length);
+    }
+
+    // --- Controls ---
+
+    document.getElementById('btn-play').addEventListener('click', () => {
+      playing = true;
+      document.getElementById('btn-play').classList.add('active');
+      document.getElementById('btn-pause').classList.remove('active');
+    });
+
+    document.getElementById('btn-pause').addEventListener('click', () => {
+      playing = false;
+      document.getElementById('btn-pause').classList.add('active');
+      document.getElementById('btn-play').classList.remove('active');
+    });
+
+    document.getElementById('btn-speed').addEventListener('click', () => {
+      speedIdx = (speedIdx + 1) % SPEEDS.length;
+      const s = SPEEDS[speedIdx];
+      document.getElementById('btn-speed').textContent = `${s}x`;
+      document.getElementById('speed-label').textContent = `${s}x`;
+    });
+
+    document.getElementById('scrub-bar').addEventListener('click', (e) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const pct = (e.clientX - rect.left) / rect.width;
+      playheadTime = pct * maxTime;
+      // Reset and replay events up to new position
+      tokens.clear();
+      shippedCount = 0;
+      reworkedCount = 0;
+      eventIdx = 0;
+      while (eventIdx < events.length && events[eventIdx].time <= playheadTime) {
+        applyEvent(events[eventIdx]);
+        eventIdx++;
+      }
+    });
+
+    // --- Init ---
+
+    const pipe = new DataPipe({
+      generator: () => {
+        // Generate mock snapshot that triggers event recording
+        return { timestamp: new Date().toISOString(), fleet: { total: 8, active: 5, agents: [] } };
+      },
+      interval: 2000,
+      bufferSize: 100,
+    });
+    pipe.subscribe(snap => recordSnapshot(snap));
+
+    window.addEventListener('resize', resize);
+    resize();
+    pipe.start();
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>

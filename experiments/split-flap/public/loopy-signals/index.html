@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loopy Signals — Causal Loop Diagram</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --fg: #ccc;
+      --dim: #555;
+      --ok: #2ecc71;
+      --warn: #f39c12;
+      --err: #e74c3c;
+      --blue: #3498db;
+      --border: #1a1a1a;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .header-title { font-size: 16px; letter-spacing: 2px; color: var(--dim); }
+    .header-stats { display: flex; gap: 20px; font-size: 12px; }
+    .stat-label { color: var(--dim); text-transform: uppercase; font-size: 10px; }
+    .stat-value { margin-top: 2px; }
+
+    .canvas-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    svg { width: 100%; height: 100%; }
+
+    /* Node styling */
+    .node-box {
+      fill: #111;
+      stroke: #333;
+      stroke-width: 1.5;
+      rx: 6;
+      cursor: pointer;
+      transition: stroke 0.3s;
+    }
+    .node-box:hover { stroke: var(--fg); }
+    .node-box.pulsing {
+      animation: node-pulse 0.6s ease-out;
+    }
+    @keyframes node-pulse {
+      0% { stroke: #fff; stroke-width: 3; }
+      100% { stroke: #333; stroke-width: 1.5; }
+    }
+    .node-label {
+      fill: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      text-anchor: middle;
+      pointer-events: none;
+    }
+    .node-count {
+      fill: var(--dim);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 18px;
+      font-weight: 700;
+      text-anchor: middle;
+      pointer-events: none;
+    }
+
+    /* Edge styling */
+    .edge-path {
+      fill: none;
+      stroke: #222;
+      stroke-width: 2;
+    }
+    .edge-path.success { stroke: #1a3a1a; }
+    .edge-path.rework  { stroke: #3a1a1a; }
+
+    /* Arrow markers */
+    .arrow-success { fill: #2a5a2a; }
+    .arrow-rework  { fill: #5a2a2a; }
+
+    /* Loop indicators */
+    .loop-indicator {
+      fill: none;
+      stroke: var(--dim);
+      stroke-width: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .loop-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 700;
+      text-anchor: middle;
+    }
+    .loop-label.reinforcing { fill: var(--ok); }
+    .loop-label.balancing { fill: var(--warn); }
+
+    .hint {
+      position: absolute;
+      bottom: 16px;
+      left: 24px;
+      font-size: 11px;
+      color: var(--dim);
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title">LOOPY SIGNALS</div>
+    <div class="header-stats">
+      <div><div class="stat-label">Throughput</div><div class="stat-value" id="stat-throughput">0/min</div></div>
+      <div><div class="stat-label">Rework Rate</div><div class="stat-value" id="stat-rework">0%</div></div>
+      <div><div class="stat-label">Queue Pressure</div><div class="stat-value" id="stat-pressure">0</div></div>
+      <div><div class="stat-label">Data</div><div class="stat-value" id="stat-source">MOCK</div></div>
+    </div>
+  </div>
+
+  <div class="canvas-container">
+    <svg id="diagram" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow-success" viewBox="0 0 10 10" refX="10" refY="5"
+                markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="arrow-success"/>
+        </marker>
+        <marker id="arrow-rework" viewBox="0 0 10 10" refX="10" refY="5"
+                markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="arrow-rework"/>
+        </marker>
+      </defs>
+    </svg>
+    <div class="hint">Click any node to inject a pulse</div>
+  </div>
+
+  <script type="module">
+    import { DataPipe } from '../data-static/data-pipe.js';
+
+    // --- Topology ---
+    // Nodes with their logical positions (normalized 0-1, mapped to viewport)
+    const NODES = [
+      { id: 'backlog',  label: 'BACKLOG',  x: 0.12, y: 0.5,  count: 0 },
+      { id: 'dispatch', label: 'DISPATCH', x: 0.32, y: 0.28, count: 0 },
+      { id: 'execute',  label: 'EXECUTE',  x: 0.55, y: 0.28, count: 0 },
+      { id: 'gates',    label: 'GATES',    x: 0.78, y: 0.28, count: 0 },
+      { id: 'ship',     label: 'SHIP',     x: 0.88, y: 0.55, count: 0 },
+      { id: 'done',     label: 'DONE',     x: 0.88, y: 0.78, count: 0 },
+      { id: 'rework',   label: 'REWORK',   x: 0.55, y: 0.72, count: 0 },
+    ];
+    const nodeMap = new Map(NODES.map(n => [n.id, n]));
+
+    // Edges: [from, to, type, base_rate]
+    const EDGES = [
+      { from: 'backlog',  to: 'dispatch', type: 'success', rate: 5 },
+      { from: 'dispatch', to: 'execute',  type: 'success', rate: 5 },
+      { from: 'execute',  to: 'gates',    type: 'success', rate: 4 },
+      { from: 'gates',    to: 'ship',     type: 'success', rate: 3 },
+      { from: 'gates',    to: 'rework',   type: 'rework',  rate: 1 },
+      { from: 'ship',     to: 'done',     type: 'success', rate: 3 },
+      { from: 'rework',   to: 'backlog',  type: 'rework',  rate: 1 },
+    ];
+
+    const NODE_W = 110;
+    const NODE_H = 60;
+
+    // --- SVG Rendering ---
+
+    const svg = document.getElementById('diagram');
+    let W, H;
+
+    function resize() {
+      const rect = svg.parentElement.getBoundingClientRect();
+      W = rect.width;
+      H = rect.height;
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      render();
+    }
+
+    function px(node) {
+      return { x: node.x * W, y: node.y * H };
+    }
+
+    // Build a curved path between two nodes
+    function edgePath(edge) {
+      const from = px(nodeMap.get(edge.from));
+      const to = px(nodeMap.get(edge.to));
+
+      // Offset start/end to node edge
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const nx = dx / dist;
+      const ny = dy / dist;
+
+      const sx = from.x + nx * (NODE_W / 2);
+      const sy = from.y + ny * (NODE_H / 2);
+      const ex = to.x - nx * (NODE_W / 2 + 10); // extra for arrowhead
+      const ey = to.y - ny * (NODE_H / 2 + 10);
+
+      // Control point: perpendicular offset for curvature
+      const mx = (sx + ex) / 2;
+      const my = (sy + ey) / 2;
+      const curvature = edge.type === 'rework' ? 40 : 20;
+      const cx = mx - ny * curvature;
+      const cy = my + nx * curvature;
+
+      return `M${sx},${sy} Q${cx},${cy} ${ex},${ey}`;
+    }
+
+    // Remove all dynamic SVG elements
+    function clearDynamic() {
+      svg.querySelectorAll('.edge-group, .node-group, .loop-group').forEach(el => el.remove());
+    }
+
+    function render() {
+      clearDynamic();
+
+      // Draw edges first (under nodes)
+      const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      edgeGroup.classList.add('edge-group');
+
+      for (const edge of EDGES) {
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.classList.add('edge-path', edge.type);
+        path.setAttribute('d', edgePath(edge));
+        path.setAttribute('marker-end', `url(#arrow-${edge.type})`);
+        path.dataset.from = edge.from;
+        path.dataset.to = edge.to;
+        edgeGroup.appendChild(path);
+      }
+      svg.appendChild(edgeGroup);
+
+      // Draw nodes
+      const nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      nodeGroup.classList.add('node-group');
+
+      for (const node of NODES) {
+        const p = px(node);
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.dataset.id = node.id;
+
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.classList.add('node-box');
+        rect.setAttribute('x', p.x - NODE_W / 2);
+        rect.setAttribute('y', p.y - NODE_H / 2);
+        rect.setAttribute('width', NODE_W);
+        rect.setAttribute('height', NODE_H);
+        rect.setAttribute('rx', '6');
+
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.classList.add('node-label');
+        label.setAttribute('x', p.x);
+        label.setAttribute('y', p.y - 8);
+        label.textContent = node.label;
+
+        const count = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        count.classList.add('node-count');
+        count.setAttribute('x', p.x);
+        count.setAttribute('y', p.y + 16);
+        count.textContent = String(node.count);
+        count.id = `count-${node.id}`;
+
+        g.appendChild(rect);
+        g.appendChild(label);
+        g.appendChild(count);
+        nodeGroup.appendChild(g);
+
+        // Click to inject pulse
+        rect.addEventListener('click', () => injectPulse(node.id));
+      }
+      svg.appendChild(nodeGroup);
+
+      // Loop indicators
+      const loopGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      loopGroup.classList.add('loop-group');
+
+      // Reinforcing loop (R): near the success path center
+      const rLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      rLabel.classList.add('loop-label', 'reinforcing');
+      rLabel.setAttribute('x', W * 0.5);
+      rLabel.setAttribute('y', H * 0.15);
+      rLabel.textContent = 'R';
+      loopGroup.appendChild(rLabel);
+
+      // Balancing loop (B): near the rework path
+      const bLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      bLabel.classList.add('loop-label', 'balancing');
+      bLabel.setAttribute('x', W * 0.35);
+      bLabel.setAttribute('y', H * 0.88);
+      bLabel.textContent = 'B';
+      loopGroup.appendChild(bLabel);
+
+      svg.appendChild(loopGroup);
+    }
+
+    // --- Particle Animation ---
+
+    const particles = [];
+
+    class Particle {
+      constructor(edge, color, speed, size) {
+        this.edge = edge;
+        this.t = 0;
+        this.speed = speed;
+        this.alive = true;
+
+        this.el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        this.el.setAttribute('r', String(size));
+        this.el.setAttribute('fill', color);
+        this.el.setAttribute('opacity', '0.9');
+        svg.appendChild(this.el);
+      }
+
+      update(dt) {
+        this.t += this.speed * dt;
+        if (this.t >= 1) {
+          this.alive = false;
+          this.el.remove();
+          return;
+        }
+
+        // Get position along edge path
+        const pathEl = svg.querySelector(`.edge-path[data-from="${this.edge.from}"][data-to="${this.edge.to}"]`);
+        if (!pathEl) { this.alive = false; this.el.remove(); return; }
+
+        const totalLen = pathEl.getTotalLength();
+        const point = pathEl.getPointAtLength(this.t * totalLen);
+        this.el.setAttribute('cx', String(point.x));
+        this.el.setAttribute('cy', String(point.y));
+      }
+    }
+
+    function spawnParticle(edge, isPulse) {
+      const color = edge.type === 'rework' ? '#e74c3c' : '#2ecc71';
+      const speed = isPulse ? 0.8 : (0.15 + edge.rate * 0.03);
+      const size = isPulse ? 5 : 3;
+      particles.push(new Particle(edge, color, speed, size));
+    }
+
+    // Continuous particle spawning based on edge rates
+    const edgeTimers = new Map();
+    function updateParticleSpawning() {
+      for (const edge of EDGES) {
+        const rate = edge.rate; // particles per ~10 seconds
+        if (rate <= 0) continue;
+        const interval = 10000 / Math.max(rate, 0.5);
+        const existing = edgeTimers.get(edge);
+        if (existing && existing.interval === interval) continue;
+        if (existing) clearInterval(existing.timer);
+        const timer = setInterval(() => spawnParticle(edge, false), interval);
+        edgeTimers.set(edge, { timer, interval });
+      }
+    }
+
+    // Pulse: bright flash traveling along all outgoing edges from a node
+    function injectPulse(nodeId) {
+      // Visual feedback on node
+      const nodeEl = svg.querySelector(`g[data-id="${nodeId}"] .node-box`);
+      if (nodeEl) {
+        nodeEl.classList.remove('pulsing');
+        void nodeEl.offsetWidth; // force reflow
+        nodeEl.classList.add('pulsing');
+      }
+
+      // Spawn pulse particles on all outgoing edges
+      for (const edge of EDGES) {
+        if (edge.from === nodeId) {
+          spawnParticle(edge, true);
+          // Cascade: after delay, pulse the target node too
+          setTimeout(() => injectPulse(edge.to), 600);
+        }
+      }
+    }
+
+    // Animation loop
+    let lastFrame = performance.now();
+    function animate(now) {
+      const dt = (now - lastFrame) / 1000;
+      lastFrame = now;
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].update(dt);
+        if (!particles[i].alive) particles.splice(i, 1);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // --- Mock Data Generator ---
+
+    const SHIPS = [
+      'Mistake Not...', 'Grey Area', 'Falling Outside', 'Sleeper Service',
+      'Just Read The Instructions', 'Of Course I Still Love You',
+      'So Much For Subtlety', 'Very Little Gravitas Indeed',
+    ];
+    const STATUSES = ['idle', 'dispatching', 'executing', 'blocked', 'gated', 'shipped'];
+    const STATUS_WEIGHTS = [0.40, 0.15, 0.25, 0.05, 0.08, 0.07];
+
+    function weightedRandom(weights) {
+      const r = Math.random();
+      let acc = 0;
+      for (let i = 0; i < weights.length; i++) {
+        acc += weights[i];
+        if (r < acc) return i;
+      }
+      return weights.length - 1;
+    }
+
+    let mockTick = 0;
+    function generateMockSnapshot() {
+      mockTick++;
+      const agents = SHIPS.map((name, i) => ({
+        agent: name,
+        status: STATUSES[weightedRandom(STATUS_WEIGHTS)],
+      }));
+
+      const dispatching = agents.filter(a => a.status === 'dispatching').length;
+      const executing = agents.filter(a => a.status === 'executing').length;
+      const blocked = agents.filter(a => a.status === 'blocked').length;
+      const gated = agents.filter(a => a.status === 'gated').length;
+      const shipped = agents.filter(a => a.status === 'shipped').length;
+      const idle = agents.filter(a => a.status === 'idle').length;
+
+      const queueBase = 15 + 8 * Math.sin(mockTick * 0.15);
+
+      return {
+        timestamp: new Date().toISOString(),
+        fleet: { total: agents.length, active: agents.length - idle, agents },
+        queue: { total: Math.round(queueBase + Math.random() * 4) },
+        // Counts for CLD nodes
+        counts: {
+          backlog: Math.round(queueBase),
+          dispatch: dispatching,
+          execute: executing,
+          gates: gated,
+          ship: shipped,
+          done: Math.round(mockTick * 0.3),
+          rework: blocked,
+        },
+        // Rates for CLD edges (dispatches per interval)
+        rates: {
+          backlog_dispatch: 2 + Math.round(Math.random() * 3),
+          dispatch_execute: dispatching,
+          execute_gates: Math.max(0, executing - 1),
+          gates_ship: Math.max(0, gated > 0 ? 1 : shipped),
+          gates_rework: blocked > 0 ? 1 : 0,
+          ship_done: shipped,
+          rework_backlog: blocked > 0 ? 1 : 0,
+        },
+      };
+    }
+
+    // --- Data Mapping ---
+
+    function applySnapshot(snap) {
+      if (!snap) return;
+
+      // Update node counts
+      const counts = snap.counts || {};
+      for (const node of NODES) {
+        if (counts[node.id] !== undefined) {
+          node.count = counts[node.id];
+          const el = document.getElementById(`count-${node.id}`);
+          if (el) el.textContent = String(node.count);
+        }
+      }
+
+      // Update edge rates
+      const rates = snap.rates || {};
+      const rateKeys = [
+        'backlog_dispatch', 'dispatch_execute', 'execute_gates',
+        'gates_ship', 'gates_rework', 'ship_done', 'rework_backlog',
+      ];
+      for (let i = 0; i < EDGES.length && i < rateKeys.length; i++) {
+        EDGES[i].rate = rates[rateKeys[i]] || 0;
+      }
+      updateParticleSpawning();
+
+      // Update stats
+      const totalRate = (rates.backlog_dispatch || 0) + (rates.dispatch_execute || 0);
+      const reworkRate = (rates.gates_rework || 0);
+      const throughput = rates.ship_done || 0;
+      const pressure = snap.queue?.total || 0;
+
+      document.getElementById('stat-throughput').textContent = `${throughput}/5s`;
+      document.getElementById('stat-rework').textContent = totalRate > 0
+        ? `${Math.round(reworkRate / totalRate * 100)}%` : '0%';
+      document.getElementById('stat-pressure').textContent = String(pressure);
+    }
+
+    // --- Init ---
+
+    const pipe = new DataPipe({
+      generator: () => generateMockSnapshot(),
+      interval: 3000,
+      bufferSize: 200,
+    });
+
+    pipe.subscribe(snap => applySnapshot(snap));
+
+    window.addEventListener('resize', resize);
+    resize();
+    pipe.start();
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

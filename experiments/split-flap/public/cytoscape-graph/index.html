@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cytoscape Agent Graph</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --fg: #ccc;
+      --dim: #555;
+      --border: #1a1a1a;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .header-title { font-size: 16px; letter-spacing: 2px; color: var(--dim); }
+    .header-stats { display: flex; gap: 20px; font-size: 12px; }
+    .stat-label { color: var(--dim); text-transform: uppercase; font-size: 10px; }
+    .stat-value { margin-top: 2px; }
+
+    #cy {
+      flex: 1;
+      background: var(--bg);
+    }
+
+    .legend {
+      display: flex;
+      gap: 16px;
+      font-size: 11px;
+      align-items: center;
+    }
+    .legend-item { display: flex; align-items: center; gap: 4px; }
+    .legend-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      display: inline-block;
+    }
+    .legend-rect {
+      width: 14px; height: 10px; border-radius: 2px;
+      display: inline-block;
+    }
+
+    .hint {
+      position: fixed;
+      bottom: 12px;
+      left: 24px;
+      font-size: 11px;
+      color: var(--dim);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title">AGENT GRAPH</div>
+    <div class="legend">
+      <div class="legend-item"><span class="legend-dot" style="background:#555"></span> Idle</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#2ecc71"></span> Executing</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#3498db"></span> Dispatching</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#e74c3c"></span> Blocked</div>
+      <div class="legend-item"><span class="legend-rect" style="background:#3498db"></span> Bead (open)</div>
+      <div class="legend-item"><span class="legend-rect" style="background:#2ecc71"></span> Bead (in-progress)</div>
+    </div>
+    <div class="header-stats">
+      <div><div class="stat-label">Agents</div><div class="stat-value" id="stat-agents">0</div></div>
+      <div><div class="stat-label">Beads</div><div class="stat-value" id="stat-beads">0</div></div>
+      <div><div class="stat-label">Edges</div><div class="stat-value" id="stat-edges">0</div></div>
+      <div><div class="stat-label">Data</div><div class="stat-value" id="stat-source">MOCK</div></div>
+    </div>
+  </div>
+
+  <div id="cy"></div>
+  <div class="hint">Click node to highlight connections. Double-click to reset.</div>
+
+  <script type="module">
+    import { DataPipe } from '../data-static/data-pipe.js';
+
+    // --- Status color mapping ---
+    const AGENT_COLORS = {
+      idle: '#555',
+      dispatching: '#3498db',
+      executing: '#2ecc71',
+      blocked: '#e74c3c',
+      gated: '#f39c12',
+      shipped: '#1a4a4a',
+    };
+    const BEAD_COLORS = {
+      open: '#3498db',
+      in_progress: '#2ecc71',
+      blocked: '#e74c3c',
+    };
+    const DIM_OPACITY = 0.12;
+
+    // --- Mock Data ---
+    const SHIPS = [
+      'Mistake Not', 'Grey Area', 'Falling Outside', 'Sleeper Service',
+      'Just Read Instr.', 'Still Love You', 'So Much Subtlety', 'No Gravitas',
+      'Gravitas Shortfall', 'Honest Mistake', 'No More Nice Guy', 'Quietly Confident',
+      'Sense Amid Madness', 'Profit Margin', 'Limiting Factor', 'Conflict Evidence',
+    ];
+    const BEADS = [];
+    for (let i = 0; i < 12; i++) {
+      BEADS.push({
+        id: `Demarch-${(1000 + i).toString(36)}`,
+        title: `Task ${i + 1}: ${['Auth refactor','Config migration','Test coverage','API endpoint','Cache layer','Error handling','Logging','Metrics','Deploy pipeline','Schema update','Data export','Search index'][i]}`,
+        priority: i < 2 ? 'P0' : i < 6 ? 'P1' : 'P2',
+        status: Math.random() < 0.4 ? 'in_progress' : 'open',
+      });
+    }
+    // Bead dependencies (a few edges)
+    const BEAD_DEPS = [
+      [BEADS[1].id, BEADS[0].id],
+      [BEADS[3].id, BEADS[2].id],
+      [BEADS[5].id, BEADS[0].id],
+      [BEADS[7].id, BEADS[6].id],
+    ];
+    // Agent -> bead assignments (each agent works on 0-2 beads)
+    const ASSIGNMENTS = new Map();
+    const STATUSES = ['idle', 'dispatching', 'executing', 'blocked', 'gated'];
+    const STATUS_WEIGHTS = [0.35, 0.12, 0.30, 0.08, 0.10, 0.05];
+
+    function weightedRandom(weights) {
+      const r = Math.random(); let acc = 0;
+      for (let i = 0; i < weights.length; i++) { acc += weights[i]; if (r < acc) return i; }
+      return weights.length - 1;
+    }
+
+    // Initialize assignments (stable across ticks)
+    for (let i = 0; i < SHIPS.length; i++) {
+      const beadCount = Math.random() < 0.3 ? 0 : Math.random() < 0.5 ? 1 : 2;
+      const assigned = [];
+      for (let j = 0; j < beadCount; j++) {
+        const bead = BEADS[Math.floor(Math.random() * BEADS.length)];
+        if (!assigned.includes(bead.id)) assigned.push(bead.id);
+      }
+      ASSIGNMENTS.set(SHIPS[i], assigned);
+    }
+
+    const agentStates = new Map();
+    function generateMockSnapshot() {
+      const agents = SHIPS.map(name => {
+        let status = agentStates.get(name) || 'idle';
+        if (Math.random() < 0.15) status = STATUSES[weightedRandom(STATUS_WEIGHTS)];
+        agentStates.set(name, status);
+        return { agent: name, status, beads: ASSIGNMENTS.get(name) || [] };
+      });
+
+      return {
+        timestamp: new Date().toISOString(),
+        fleet: { total: agents.length, active: agents.filter(a => a.status !== 'idle').length, agents },
+        beads: BEADS,
+        bead_deps: BEAD_DEPS,
+      };
+    }
+
+    // --- Cytoscape Init ---
+
+    const cy = cytoscape({
+      container: document.getElementById('cy'),
+      style: [
+        {
+          selector: 'node[type="agent"]',
+          style: {
+            'shape': 'ellipse',
+            'label': 'data(label)',
+            'text-valign': 'bottom',
+            'text-halign': 'center',
+            'font-size': '9px',
+            'font-family': 'JetBrains Mono, monospace',
+            'color': '#888',
+            'text-margin-y': 6,
+            'background-color': 'data(color)',
+            'width': 'data(size)',
+            'height': 'data(size)',
+            'border-width': 0,
+            'overlay-opacity': 0,
+          },
+        },
+        {
+          selector: 'node[type="bead"]',
+          style: {
+            'shape': 'round-rectangle',
+            'label': 'data(label)',
+            'text-valign': 'bottom',
+            'text-halign': 'center',
+            'font-size': '8px',
+            'font-family': 'JetBrains Mono, monospace',
+            'color': '#666',
+            'text-margin-y': 6,
+            'background-color': 'data(color)',
+            'width': 'data(size)',
+            'height': 'mapData(size, 20, 40, 14, 28)',
+            'border-width': 0,
+            'overlay-opacity': 0,
+          },
+        },
+        {
+          selector: 'edge[type="works-on"]',
+          style: {
+            'line-color': '#2a2a2a',
+            'target-arrow-color': '#2a2a2a',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            'width': 1.5,
+            'arrow-scale': 0.7,
+            'overlay-opacity': 0,
+          },
+        },
+        {
+          selector: 'edge[type="depends-on"]',
+          style: {
+            'line-color': '#1a1a3a',
+            'line-style': 'dashed',
+            'target-arrow-color': '#1a1a3a',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            'width': 1,
+            'arrow-scale': 0.6,
+            'overlay-opacity': 0,
+          },
+        },
+        // Highlighted states
+        {
+          selector: '.highlighted',
+          style: {
+            'opacity': 1,
+            'z-index': 10,
+          },
+        },
+        {
+          selector: '.dimmed',
+          style: {
+            'opacity': DIM_OPACITY,
+          },
+        },
+        {
+          selector: 'edge.highlighted[type="works-on"]',
+          style: {
+            'line-color': '#3ebc61',
+            'target-arrow-color': '#3ebc61',
+            'width': 2.5,
+          },
+        },
+        {
+          selector: 'edge.highlighted[type="depends-on"]',
+          style: {
+            'line-color': '#4a6adb',
+            'target-arrow-color': '#4a6adb',
+            'width': 2,
+          },
+        },
+      ],
+      layout: { name: 'preset' },
+      minZoom: 0.3,
+      maxZoom: 3,
+      wheelSensitivity: 0.3,
+    });
+
+    // --- Graph Building ---
+
+    let lastNodeIds = new Set();
+    let lastEdgeIds = new Set();
+    let needsLayout = false;
+
+    function updateGraph(snap) {
+      if (!snap?.fleet?.agents) return;
+
+      const newNodeIds = new Set();
+      const newEdgeIds = new Set();
+      const elements = { nodes: [], edges: [] };
+
+      // Agent nodes
+      for (const agent of snap.fleet.agents) {
+        const id = `agent-${agent.agent.replace(/[^a-z0-9]/gi, '_')}`;
+        newNodeIds.add(id);
+        const color = AGENT_COLORS[agent.status] || AGENT_COLORS.idle;
+        const size = agent.status === 'idle' ? 20 : 30;
+
+        const existing = cy.getElementById(id);
+        if (existing.length) {
+          existing.data('color', color);
+          existing.data('size', size);
+          existing.data('status', agent.status);
+        } else {
+          elements.nodes.push({
+            data: {
+              id, label: agent.agent, type: 'agent',
+              color, size, status: agent.status,
+            },
+          });
+          needsLayout = true;
+        }
+
+        // Agent -> bead edges
+        for (const beadId of (agent.beads || [])) {
+          const edgeId = `${id}->${beadId}`;
+          newEdgeIds.add(edgeId);
+          if (!cy.getElementById(edgeId).length) {
+            elements.edges.push({
+              data: { id: edgeId, source: id, target: beadId, type: 'works-on' },
+            });
+          }
+        }
+      }
+
+      // Bead nodes
+      for (const bead of (snap.beads || [])) {
+        newNodeIds.add(bead.id);
+        const color = BEAD_COLORS[bead.status] || BEAD_COLORS.open;
+        const size = bead.priority === 'P0' ? 40 : bead.priority === 'P1' ? 30 : 22;
+
+        const existing = cy.getElementById(bead.id);
+        if (existing.length) {
+          existing.data('color', color);
+          existing.data('size', size);
+        } else {
+          elements.nodes.push({
+            data: {
+              id: bead.id, label: bead.id, type: 'bead',
+              color, size, priority: bead.priority,
+            },
+          });
+          needsLayout = true;
+        }
+      }
+
+      // Bead dependency edges
+      for (const [from, to] of (snap.bead_deps || [])) {
+        const edgeId = `dep-${from}->${to}`;
+        newEdgeIds.add(edgeId);
+        if (!cy.getElementById(edgeId).length) {
+          elements.edges.push({
+            data: { id: edgeId, source: from, target: to, type: 'depends-on' },
+          });
+        }
+      }
+
+      // Remove gone elements
+      for (const id of lastNodeIds) {
+        if (!newNodeIds.has(id) && cy.getElementById(id).length) {
+          cy.remove(cy.getElementById(id));
+          needsLayout = true;
+        }
+      }
+      for (const id of lastEdgeIds) {
+        if (!newEdgeIds.has(id) && cy.getElementById(id).length) {
+          cy.remove(cy.getElementById(id));
+        }
+      }
+
+      // Add new elements
+      if (elements.nodes.length || elements.edges.length) {
+        cy.add([...elements.nodes, ...elements.edges]);
+      }
+
+      lastNodeIds = newNodeIds;
+      lastEdgeIds = newEdgeIds;
+
+      // Run layout if topology changed
+      if (needsLayout) {
+        runLayout();
+        needsLayout = false;
+      }
+
+      // Update stats
+      document.getElementById('stat-agents').textContent = String(snap.fleet.agents.length);
+      document.getElementById('stat-beads').textContent = String((snap.beads || []).length);
+      document.getElementById('stat-edges').textContent = String(cy.edges().length);
+    }
+
+    function runLayout() {
+      cy.layout({
+        name: 'fcose',
+        animate: true,
+        animationDuration: 600,
+        randomize: cy.nodes().length < 5,  // only randomize on first layout
+        nodeRepulsion: 6000,
+        idealEdgeLength: 100,
+        edgeElasticity: 0.1,
+        gravity: 0.3,
+        gravityRange: 3.8,
+        nodeSeparation: 80,
+      }).run();
+    }
+
+    // --- Interactions ---
+
+    let highlighted = false;
+
+    cy.on('tap', 'node', function (evt) {
+      const node = evt.target;
+      cy.elements().addClass('dimmed');
+
+      // Highlight this node + connected neighborhood
+      const neighborhood = node.neighborhood().add(node);
+      // If it's a bead, also show the dependency chain
+      if (node.data('type') === 'bead') {
+        const deps = node.successors().add(node.predecessors());
+        neighborhood.merge(deps);
+      }
+      neighborhood.removeClass('dimmed').addClass('highlighted');
+      highlighted = true;
+    });
+
+    cy.on('tap', function (evt) {
+      if (evt.target === cy) {
+        resetHighlight();
+      }
+    });
+
+    function resetHighlight() {
+      cy.elements().removeClass('dimmed highlighted');
+      highlighted = false;
+    }
+
+    // Double-click to reset
+    cy.on('dbltap', function () {
+      resetHighlight();
+    });
+
+    // --- Init ---
+
+    const pipe = new DataPipe({
+      generator: () => generateMockSnapshot(),
+      interval: 4000,
+      bufferSize: 100,
+    });
+
+    pipe.subscribe(snap => updateGraph(snap));
+    pipe.start();
+  </script>
+</body>
+</html>
