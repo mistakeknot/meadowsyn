@@ -1,0 +1,14 @@
+[Unit]
+Description=Meadowsyn Factory Stream (SSE)
+After=network.target
+
+[Service]
+Type=simple
+User=mk
+ExecStart=/home/mk/.local/bin/clavain-cli factory-stream --port 8401 --interval 5s --cors-origins "https://dev.meadowsyn.com,https://meadowsyn.com"
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/home/mk
+
+[Install]
+WantedBy=multi-user.target

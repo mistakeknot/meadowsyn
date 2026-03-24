@@ -228,13 +228,7 @@
       if (!snap || !cy) return;
       var m = snap.metrics || {};
 
-      // Source indicator
-      var badge = document.getElementById('source-badge');
-      if (snap.source === 'live') {
-        badge.textContent = 'LIVE'; badge.className = 'source-badge source-live';
-      } else {
-        badge.textContent = 'MOCK'; badge.className = 'source-badge source-mock';
-      }
+      // Source indicator (transport-aware badge is set separately via onTransport)
 
       // HUD
       document.getElementById('m-agents').textContent = String(snap.fleet.total || 0);
@@ -298,13 +292,28 @@
       initGlowTextures(); resizeGlow(); createProjectLabels(); updateProjectLabels();
       initCytoscape();
 
-      // DataPipe: try to fetch live snapshot.json, fall back to mock
+      // DataPipe: SSE if ?sse= param present, else poll snapshot.json
+      var params = new URLSearchParams(window.location.search);
+      var sseUrl = params.get('sse') || null;
       var pipe = new DataPipe({
+        sse: sseUrl,
         url: './snapshot.json',
         interval: 5000,
         bufferSize: 100,
       });
       pipe.subscribe(applySnapshot);
+
+      // Transport-aware source badge
+      var badge = document.getElementById('source-badge');
+      pipe.onTransport(function(mode) {
+        if (mode === 'sse') {
+          badge.textContent = 'LIVE'; badge.className = 'source-badge source-live';
+        } else if (mode === 'polling') {
+          badge.textContent = 'POLLING'; badge.className = 'source-badge source-mock';
+        } else {
+          badge.textContent = 'DISCONNECTED'; badge.className = 'source-badge source-stale';
+        }
+      });
 
       window.addEventListener('resize', function() {
         W = window.innerWidth; H = window.innerHeight;

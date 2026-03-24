@@ -1,0 +1,12 @@
+stream.meadowsyn.com {
+	reverse_proxy localhost:8401
+
+	header {
+		# SSE requires no buffering
+		X-Accel-Buffering "no"
+	}
+
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+}

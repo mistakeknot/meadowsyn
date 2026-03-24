@@ -1,22 +1,31 @@
 /**
- * DataPipe — polling data pipe with ring buffer history.
+ * DataPipe — dual-transport data pipe with ring buffer history.
  *
- * Usage:
+ * Usage (SSE — live streaming):
+ *   const pipe = new DataPipe({ sse: 'http://localhost:8401/stream', url: 'snapshot.json' });
+ *   pipe.subscribe(snapshot => console.log(snapshot));
+ *   pipe.start();
+ *
+ * Usage (polling only):
  *   const pipe = new DataPipe({ url: 'snapshot.json', interval: 5000 });
  *   pipe.subscribe(snapshot => console.log(snapshot));
  *   pipe.start();
  *
+ * SSE is primary transport when configured. Falls back to polling if SSE
+ * fails 3 consecutive times or is not configured.
  * Works with file:// (pass a generator function as fallback) and https://.
  */
 export class DataPipe {
   /**
    * @param {object} opts
-   * @param {string}   [opts.url]        - URL to poll (fetch-based)
+   * @param {string}   [opts.sse]         - SSE endpoint URL (primary transport)
+   * @param {string}   [opts.url]         - URL to poll (fallback transport)
    * @param {Function} [opts.generator]   - Fallback: () => snapshot (for file:// or mock)
    * @param {number}   [opts.interval]    - Poll interval ms (default 5000)
    * @param {number}   [opts.bufferSize]  - Ring buffer capacity (default 720 = 1hr at 5s)
    */
-  constructor({ url, generator, interval = 5000, bufferSize = 720 } = {}) {
+  constructor({ sse, url, generator, interval = 5000, bufferSize = 720 } = {}) {
+    this._sseUrl = sse || null;
     this._url = url;
     this._generator = generator;
     this._interval = interval;
@@ -28,9 +37,15 @@ export class DataPipe {
     this._latest = null;
     this._lastOk = 0;         // timestamp of last successful fetch
     this._subscribers = new Set();
+    this._transportListeners = new Set();
     this._timer = null;
     this._retryDelay = 0;     // current backoff delay (0 = no retry pending)
     this._retryTimer = null;
+
+    // SSE state
+    this._eventSource = null;
+    this._sseFailCount = 0;
+    this._transport = 'disconnected'; // 'sse' | 'polling' | 'disconnected'
 
     // Pre-allocate ring buffer slots
     this._buffer.length = bufferSize;
@@ -47,24 +62,31 @@ export class DataPipe {
     this._subscribers.delete(fn);
   }
 
-  /** Start polling. */
-  start() {
-    if (this._timer) return;
-    this._poll();  // immediate first poll
-    this._timer = setInterval(() => this._poll(), this._interval);
+  /** Subscribe to transport changes ('sse'|'polling'|'disconnected'). Returns unsubscribe. */
+  onTransport(fn) {
+    this._transportListeners.add(fn);
+    return () => this._transportListeners.delete(fn);
   }
 
-  /** Stop polling. */
+  /** Current transport mode. */
+  get transport() {
+    return this._transport;
+  }
+
+  /** Start data collection. Tries SSE first if configured, otherwise polls. */
+  start() {
+    if (this._sseUrl) {
+      this._startSSE();
+    } else {
+      this._startPolling();
+    }
+  }
+
+  /** Stop all transports. */
   stop() {
-    if (this._timer) {
-      clearInterval(this._timer);
-      this._timer = null;
-    }
-    if (this._retryTimer) {
-      clearTimeout(this._retryTimer);
-      this._retryTimer = null;
-      this._retryDelay = 0;
-    }
+    this._stopSSE();
+    this._stopPolling();
+    this._setTransport('disconnected');
   }
 
   /** Get the latest snapshot (or null if none yet). */
@@ -102,7 +124,98 @@ export class DataPipe {
     return this._interval;
   }
 
-  // --- Internals ---
+  // --- SSE Transport ---
+
+  _startSSE() {
+    if (this._eventSource) return;
+
+    try {
+      this._eventSource = new EventSource(this._sseUrl);
+    } catch {
+      this._fallbackToPolling();
+      return;
+    }
+
+    this._eventSource.addEventListener('snapshot', (e) => {
+      try {
+        const snapshot = JSON.parse(e.data);
+        this._sseFailCount = 0;
+        this._pushSnapshot(snapshot);
+        this._setTransport('sse');
+      } catch { /* malformed JSON — skip */ }
+    });
+
+    this._eventSource.addEventListener('delta', (e) => {
+      try {
+        const delta = JSON.parse(e.data);
+        this._applyDelta(delta);
+      } catch { /* skip */ }
+    });
+
+    this._eventSource.addEventListener('open', () => {
+      this._sseFailCount = 0;
+      this._setTransport('sse');
+      // Stop polling if it was running as fallback
+      this._stopPolling();
+    });
+
+    this._eventSource.addEventListener('error', () => {
+      this._sseFailCount++;
+      if (this._sseFailCount >= 3) {
+        this._fallbackToPolling();
+      }
+      // EventSource auto-reconnects, so we just count failures
+    });
+  }
+
+  _stopSSE() {
+    if (this._eventSource) {
+      this._eventSource.close();
+      this._eventSource = null;
+    }
+  }
+
+  _fallbackToPolling() {
+    this._stopSSE();
+    this._startPolling();
+  }
+
+  _applyDelta(delta) {
+    if (!this._latest || delta.type !== 'agent_status') return;
+    // Update the matching agent in the latest snapshot
+    const agents = this._latest.fleet?.agents;
+    if (!agents) return;
+    for (const a of agents) {
+      const name = a.agent || a.session_name;
+      if (name === delta.agent) {
+        a.status = delta.to === 'absent' ? 'offline' : delta.to;
+        break;
+      }
+    }
+    // Re-notify with updated snapshot
+    this._notify(this._latest);
+  }
+
+  // --- Polling Transport ---
+
+  _startPolling() {
+    if (this._timer) return;
+    this._setTransport('polling');
+    this._poll();  // immediate first poll
+    this._timer = setInterval(() => this._poll(), this._interval);
+  }
+
+  _stopPolling() {
+    if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = null;
+    }
+    if (this._retryTimer) {
+      clearTimeout(this._retryTimer);
+      this._retryTimer = null;
+      this._retryDelay = 0;
+    }
+  }
 
   async _poll() {
     try {
@@ -135,6 +248,8 @@ export class DataPipe {
     return null;
   }
 
+  // --- Shared ---
+
   _pushSnapshot(snapshot) {
     this._buffer[this._head] = snapshot;
     this._head = (this._head + 1) % this._bufferSize;
@@ -147,6 +262,14 @@ export class DataPipe {
   _notify(snapshot) {
     for (const fn of this._subscribers) {
       try { fn(snapshot); } catch { /* subscriber errors don't break the pipe */ }
+    }
+  }
+
+  _setTransport(mode) {
+    if (this._transport === mode) return;
+    this._transport = mode;
+    for (const fn of this._transportListeners) {
+      try { fn(mode); } catch { /* listener errors don't break the pipe */ }
     }
   }
 
