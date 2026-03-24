@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ambient v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <script defer src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+  <style>
+    :root { --bg: #0a0a0a; --fg: #ccc; --dim: #555; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg); color: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+      overflow: hidden; height: 100vh;
+    }
+
+    canvas#glow {
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      z-index: 0;
+    }
+    #cy {
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      z-index: 1; background: transparent;
+    }
+    .hud { position: fixed; z-index: 2; pointer-events: none; }
+    .hud-top {
+      top: 0; left: 0; right: 0;
+      display: flex; justify-content: space-between;
+      padding: 14px 24px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%);
+    }
+    .hud-bottom {
+      bottom: 0; left: 0; right: 0;
+      padding: 14px 24px;
+      background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .hud-title { font-size: 14px; letter-spacing: 3px; color: rgba(255,255,255,0.3); }
+    .hud-metrics { display: flex; gap: 20px; }
+    .hud-metric .label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.2); }
+    .hud-metric .value { font-size: 13px; color: rgba(255,255,255,0.45); margin-top: 1px; }
+    .hud-hint { font-size: 10px; color: rgba(255,255,255,0.15); }
+    .state-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+    .state-healthy  { color: rgba(46,204,113,0.5); }
+    .state-busy     { color: rgba(241,196,15,0.5); }
+    .state-critical { color: rgba(231,76,60,0.6); }
+
+    /* Performance overlay */
+    .perf {
+      position: fixed; top: 44px; right: 24px;
+      z-index: 3; pointer-events: none;
+      font-size: 10px; color: rgba(255,255,255,0.2);
+      text-align: right; line-height: 1.6;
+    }
+
+    .project-label {
+      position: fixed; z-index: 3; pointer-events: none;
+      font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+      color: rgba(255,255,255,0.12);
+      white-space: nowrap;
+      transform: translate(-50%, -50%);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glow"></canvas>
+  <div id="cy"></div>
+
+  <div class="hud hud-top">
+    <div class="hud-title">AMBIENT v2</div>
+    <div class="hud-metrics">
+      <div class="hud-metric"><div class="label">Nodes</div><div class="value" id="m-nodes">0</div></div>
+      <div class="hud-metric"><div class="label">Rendered</div><div class="value" id="m-rendered">0</div></div>
+      <div class="hud-metric"><div class="label">Culled</div><div class="value" id="m-culled">0</div></div>
+      <div class="hud-metric"><div class="label">Auras</div><div class="value" id="m-auras">0</div></div>
+    </div>
+  </div>
+
+  <div class="perf" id="perf">
+    <div>Glow: <span id="p-glow">0</span>ms</div>
+    <div>Sync: <span id="p-sync">0</span>ms</div>
+    <div>Total: <span id="p-total">0</span>ms</div>
+    <div>Scale: 0.5x</div>
+  </div>
+
+  <div class="hud hud-bottom">
+    <div><span class="state-label" id="state-label">HEALTHY</span></div>
+    <div class="hud-hint">500-node stress test · Pre-rendered stamps · 0.5x resolution · Idle culling</div>
+  </div>
+
+  <script type="module">
+    import { DataPipe } from '../data-static/data-pipe.js';
+
+    // =========================================
+    // PROJECT CONSTELLATION (same as F11)
+    // =========================================
+
+    var LAYER_Y = { L1: 0.78, L2: 0.50, L3: 0.22 };
+    var PILLAR_PROJECTS = [
+      { id: 'intercore', label: 'Intercore', layer: 'L1', x: 0.30 },
+      { id: 'intermute', label: 'Intermute', layer: 'L1', x: 0.50 },
+      { id: 'interweave', label: 'Interweave', layer: 'L1', x: 0.70 },
+      { id: 'clavain', label: 'Clavain', layer: 'L2', x: 0.35 },
+      { id: 'skaffen', label: 'Skaffen', layer: 'L2', x: 0.65 },
+      { id: 'ockham', label: 'Ockham', layer: 'L2', x: 0.50 },
+      { id: 'autarch', label: 'Autarch', layer: 'L3', x: 0.30 },
+      { id: 'meadowsyn', label: 'Meadowsyn', layer: 'L3', x: 0.50 },
+      { id: 'intercom', label: 'Intercom', layer: 'L3', x: 0.70 },
+    ];
+
+    var ALL_PROJECTS = [];
+    PILLAR_PROJECTS.forEach(function(p) {
+      ALL_PROJECTS.push({ id: p.id, label: p.label, nx: p.x, ny: LAYER_Y[p.layer] });
+    });
+    var PROJECT_MAP = new Map();
+    ALL_PROJECTS.forEach(function(p) { PROJECT_MAP.set(p.id, p); });
+    var PROJECT_IDS = ALL_PROJECTS.map(function(p) { return p.id; });
+
+    function projectPosition(p, vW, vH) {
+      var pad = 80;
+      return { x: pad + p.nx * (vW - 2*pad), y: pad + p.ny * (vH - 2*pad) };
+    }
+
+    // =========================================
+    // L1: AMBIENT GLOW — OPTIMIZED
+    // =========================================
+    // Three optimizations from the flux-drive review:
+    //   1. Pre-rendered gradient textures (6 stamps, avoid createRadialGradient per frame)
+    //   2. 0.5x resolution rendering (glow is blurry — half res is indistinguishable)
+    //   3. Idle glow culling (intensity < 0.008 → skip draw)
+    // Plus:
+    //   4. Project-level aggregate auras (single variable: % blocked)
+    //   5. "Healthy = invisible" (executing at 0.03, not 0.25)
+
+    var glowCanvas = document.getElementById('glow');
+    var glowCtx = glowCanvas.getContext('2d');
+    var W, H, dpr;
+
+    var GLOW_COLORS = {
+      idle:        { r: 60,  g: 60,  b: 60  },
+      dispatching: { r: 52,  g: 120, b: 210 },
+      executing:   { r: 46,  g: 190, b: 100 },
+      blocked:     { r: 220, g: 60,  b: 50  },
+      gated:       { r: 230, g: 150, b: 30  },
+      shipped:     { r: 40,  g: 130, b: 130 },
+    };
+
+    // "Healthy = invisible" intensity map
+    var GLOW_INTENSITY = {
+      idle: 0.02, dispatching: 0.08, executing: 0.03,
+      blocked: 0.35, gated: 0.28, shipped: 0.04,
+    };
+
+    var GLOW_RADIUS = 100;
+    var AURA_RADIUS = 200;
+
+    // Optimization 1: Pre-rendered gradient stamps
+    var glowTextures = {};
+    var auraTexture = null;
+
+    function initGlowTextures() {
+      var size = GLOW_RADIUS * 2;
+      Object.keys(GLOW_COLORS).forEach(function(status) {
+        var c = GLOW_COLORS[status];
+        var off = document.createElement('canvas');
+        off.width = size; off.height = size;
+        var ctx = off.getContext('2d');
+        var grad = ctx.createRadialGradient(GLOW_RADIUS, GLOW_RADIUS, 0, GLOW_RADIUS, GLOW_RADIUS, GLOW_RADIUS);
+        grad.addColorStop(0, 'rgba('+c.r+','+c.g+','+c.b+',1)');
+        grad.addColorStop(0.4, 'rgba('+c.r+','+c.g+','+c.b+',0.4)');
+        grad.addColorStop(1, 'rgba('+c.r+','+c.g+','+c.b+',0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+        glowTextures[status] = off;
+      });
+
+      // Aura: warm white for project aggregate
+      var aSize = AURA_RADIUS * 2;
+      auraTexture = document.createElement('canvas');
+      auraTexture.width = aSize; auraTexture.height = aSize;
+      var actx = auraTexture.getContext('2d');
+      var aGrad = actx.createRadialGradient(AURA_RADIUS, AURA_RADIUS, 0, AURA_RADIUS, AURA_RADIUS, AURA_RADIUS);
+      aGrad.addColorStop(0, 'rgba(255,255,255,1)');
+      aGrad.addColorStop(0.3, 'rgba(255,255,255,0.3)');
+      aGrad.addColorStop(1, 'rgba(255,255,255,0)');
+      actx.fillStyle = aGrad;
+      actx.fillRect(0, 0, aSize, aSize);
+    }
+
+    // Optimization 2: 0.5x resolution
+    function resizeGlow() {
+      dpr = window.devicePixelRatio || 1;
+      W = window.innerWidth; H = window.innerHeight;
+      var scale = 0.5;
+      glowCanvas.width = W * dpr * scale;
+      glowCanvas.height = H * dpr * scale;
+      glowCanvas.style.width = W + 'px';
+      glowCanvas.style.height = H + 'px';
+      glowCtx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    }
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    var glowNodes = new Map();
+    var projectAuras = new Map();
+    var perfStats = { sync: 0, draw: 0, total: 0, rendered: 0, culled: 0 };
+
+    function drawGlow() {
+      var t0 = performance.now();
+      glowCtx.clearRect(0, 0, W, H);
+      var rendered = 0, culled = 0;
+
+      // Draw project auras first
+      projectAuras.forEach(function(aura) {
+        if (aura.intensity < 0.005) { culled++; return; }
+        glowCtx.globalAlpha = aura.intensity;
+        glowCtx.drawImage(auraTexture, aura.x - AURA_RADIUS, aura.y - AURA_RADIUS, AURA_RADIUS*2, AURA_RADIUS*2);
+        rendered++;
+      });
+
+      // Draw node glows with culling
+      glowNodes.forEach(function(g) {
+        // Optimization 3: cull invisible
+        if (g.intensity < 0.008) { culled++; return; }
+        var tex = glowTextures[g.status] || glowTextures.idle;
+        if (!tex) { culled++; return; }
+        glowCtx.globalAlpha = g.intensity;
+        glowCtx.drawImage(tex, g.x - g.radius, g.y - g.radius, g.radius*2, g.radius*2);
+        rendered++;
+      });
+
+      glowCtx.globalAlpha = 1;
+      perfStats.draw = performance.now() - t0;
+      perfStats.rendered = rendered;
+      perfStats.culled = culled;
+    }
+
+    function syncGlow() {
+      var t0 = performance.now();
+      if (!cy) return;
+
+      cy.nodes('[type != "anchor"]').forEach(function(node) {
+        var id = node.id();
+        var pos = node.renderedPosition();
+        var status = node.data('status') || 'idle';
+        var ti = GLOW_INTENSITY[status] || GLOW_INTENSITY.idle;
+        var isBead = node.data('type') === 'bead';
+        ti = isBead ? ti * 0.3 : ti;
+        var tr = isBead ? GLOW_RADIUS * 0.4 : GLOW_RADIUS;
+
+        var g = glowNodes.get(id);
+        if (!g) { g = { x: pos.x, y: pos.y, radius: tr, intensity: 0, status: status }; glowNodes.set(id, g); }
+        g.x = lerp(g.x, pos.x, 0.15);
+        g.y = lerp(g.y, pos.y, 0.15);
+        g.intensity = lerp(g.intensity, ti, 0.06);
+        g.radius = lerp(g.radius, tr, 0.06);
+        g.status = status;
+      });
+
+      glowNodes.forEach(function(_, id) { if (!cy.getElementById(id).length) glowNodes.delete(id); });
+
+      // Project auras: aggregate % blocked
+      ALL_PROJECTS.forEach(function(proj) {
+        var pos = projectPosition(proj, W, H);
+        var aura = projectAuras.get(proj.id);
+        if (!aura) { aura = { x: pos.x, y: pos.y, intensity: 0 }; projectAuras.set(proj.id, aura); }
+        aura.x = pos.x; aura.y = pos.y;
+        var total = 0, blocked = 0;
+        cy.nodes('[project = "' + proj.id + '"]').forEach(function(n) {
+          total++;
+          if (n.data('status') === 'blocked' || n.data('status') === 'gated') blocked++;
+        });
+        var target = total > 0 ? 0.015 + 0.12 * (blocked / total) : 0.008;
+        aura.intensity = lerp(aura.intensity, target, 0.04);
+      });
+
+      perfStats.sync = performance.now() - t0;
+    }
+
+    var frameCount = 0;
+    function animateGlow() {
+      var t0 = performance.now();
+      syncGlow();
+      drawGlow();
+      perfStats.total = performance.now() - t0;
+
+      // Update perf HUD every 30 frames
+      frameCount++;
+      if (frameCount % 30 === 0) {
+        document.getElementById('p-glow').textContent = perfStats.draw.toFixed(1);
+        document.getElementById('p-sync').textContent = perfStats.sync.toFixed(1);
+        document.getElementById('p-total').textContent = perfStats.total.toFixed(1);
+        document.getElementById('m-rendered').textContent = String(perfStats.rendered);
+        document.getElementById('m-culled').textContent = String(perfStats.culled);
+      }
+      requestAnimationFrame(animateGlow);
+    }
+
+    // =========================================
+    // PROJECT LABELS
+    // =========================================
+
+    function createProjectLabels() {
+      PILLAR_PROJECTS.forEach(function(proj) {
+        var el = document.createElement('div');
+        el.className = 'project-label';
+        el.textContent = proj.label;
+        document.body.appendChild(el);
+      });
+    }
+    function updateProjectLabels() {
+      var labels = document.querySelectorAll('.project-label');
+      PILLAR_PROJECTS.forEach(function(proj, i) {
+        if (labels[i]) {
+          var pos = projectPosition(ALL_PROJECTS[i], W, H);
+          labels[i].style.left = pos.x + 'px';
+          labels[i].style.top = (pos.y - 40) + 'px';
+        }
+      });
+    }
+
+    // =========================================
+    // L2: CYTOSCAPE (minimal — focus is on glow perf)
+    // =========================================
+
+    var AGENT_COLORS = {
+      idle: '#333', dispatching: '#3498db', executing: '#2ecc71',
+      blocked: '#e74c3c', gated: '#f39c12', shipped: '#1a7a7a',
+    };
+
+    var cy;
+    function initCytoscape() {
+      if (window.cytoscapeFcose && typeof cytoscape !== 'undefined') {
+        try { var exts = cytoscape.extensions(); if (!(exts && exts.layout && exts.layout.fcose)) cytoscape.use(window.cytoscapeFcose); } catch(e){}
+      }
+      cy = cytoscape({
+        container: document.getElementById('cy'),
+        style: [
+          { selector: 'node[type="anchor"]', style: { 'width':1,'height':1,'opacity':0,'label':'','events':'no' } },
+          { selector: 'node[type="agent"]', style: {
+            'shape':'ellipse','label':'','background-color':'data(color)',
+            'width':'data(size)','height':'data(size)',
+            'border-width':1,'border-color':'rgba(255,255,255,0.08)','overlay-opacity':0,
+          }},
+          { selector: 'node[type="bead"]', style: {
+            'shape':'round-rectangle','label':'','background-color':'data(color)',
+            'width':'data(size)','height':'mapData(size, 12, 24, 8, 16)',
+            'border-width':0,'overlay-opacity':0,
+          }},
+          { selector: 'edge', style: { 'opacity':0,'events':'no' } },
+          { selector: '.highlighted', style: { 'opacity':1,'z-index':10,'label':'data(label)',
+            'font-size':'8px','color':'rgba(255,255,255,0.6)','text-outline-color':'rgba(0,0,0,0.8)','text-outline-width':2,
+            'text-valign':'bottom','text-margin-y':4,
+          }},
+          { selector: '.dimmed', style: { 'opacity':0.05 } },
+        ],
+        layout: { name: 'preset' },
+        minZoom: 0.3, maxZoom: 3, wheelSensitivity: 0.3,
+      });
+
+      cy.on('tap', 'node[type != "anchor"]', function(evt) {
+        var node = evt.target; cy.elements().addClass('dimmed');
+        node.neighborhood().add(node).filter('[type != "anchor"]').removeClass('dimmed').addClass('highlighted');
+      });
+      cy.on('tap', function(evt) { if (evt.target === cy) cy.elements().removeClass('dimmed highlighted'); });
+
+      // Add anchors
+      ALL_PROJECTS.forEach(function(proj) {
+        cy.add({ data: { id: 'anchor-'+proj.id, type: 'anchor' }, position: projectPosition(proj, W, H) });
+      });
+    }
+
+    // =========================================
+    // 500-NODE STRESS TEST GENERATOR
+    // =========================================
+
+    var SHIP_NAMES = [];
+    var prefixes = ['GSV ','GCU ','ROU ','LOU ','MSV ','Dma ','Pic ','Eth '];
+    var suffixes = ['Alpha','Beta','Gamma','Delta','Epsilon','Zeta','Eta','Theta','Iota','Kappa',
+      'Lambda','Mu','Nu','Xi','Omicron','Pi','Rho','Sigma','Tau','Upsilon'];
+    for (var i = 0; i < 60; i++) {
+      SHIP_NAMES.push(prefixes[i % prefixes.length] + suffixes[i % suffixes.length] + '-' + i);
+    }
+
+    var BEAD_IDS = [];
+    for (var i = 0; i < 440; i++) {
+      BEAD_IDS.push('bead-' + i.toString(36).padStart(3, '0'));
+    }
+
+    // Assign to projects
+    var AGENT_PROJS = new Map();
+    SHIP_NAMES.forEach(function(name, i) { AGENT_PROJS.set(name, PROJECT_IDS[i % PROJECT_IDS.length]); });
+    var BEAD_PROJS = new Map();
+    BEAD_IDS.forEach(function(id, i) { BEAD_PROJS.set(id, PROJECT_IDS[i % PROJECT_IDS.length]); });
+
+    var STATUSES = ['idle','dispatching','executing','blocked','gated'];
+    var STATUS_W = [0.40,0.08,0.35,0.07,0.05];
+    function wRand(w) { var r=Math.random(),a=0; for(var i=0;i<w.length;i++){a+=w[i];if(r<a)return i;} return w.length-1; }
+
+    var agentStates = new Map();
+
+    function generateSnapshot() {
+      var agents = SHIP_NAMES.map(function(name) {
+        var s = agentStates.get(name) || 'idle';
+        if (Math.random() < 0.10) s = STATUSES[wRand(STATUS_W)];
+        agentStates.set(name, s);
+        return { agent: name, status: s, project: AGENT_PROJS.get(name) };
+      });
+      var total = agents.length;
+      var active = agents.filter(function(a){return a.status!=='idle';}).length;
+      var blocked = agents.filter(function(a){return a.status==='blocked';}).length;
+
+      var beads = BEAD_IDS.map(function(id) {
+        return { id: id, status: Math.random() < 0.3 ? 'in_progress' : Math.random() < 0.05 ? 'blocked' : 'open',
+          priority: Math.random() < 0.05 ? 'P0' : Math.random() < 0.2 ? 'P1' : 'P2' };
+      });
+
+      return {
+        timestamp: new Date().toISOString(),
+        fleet: { total: total, active: active, agents: agents },
+        beads: beads,
+        bead_projects: Object.fromEntries(BEAD_PROJS),
+        metrics: { utilization: active/total, errorRate: blocked/Math.max(active,1) },
+      };
+    }
+
+    // =========================================
+    // DATA -> GRAPH
+    // =========================================
+
+    var firstUpdate = true, layoutPending = false;
+
+    function applySnapshot(snap) {
+      if (!snap || !cy) return;
+
+      document.getElementById('m-nodes').textContent = String(snap.fleet.agents.length + (snap.beads||[]).length);
+
+      var state = (snap.metrics.errorRate||0) > 0.3 ? 'critical' : (snap.metrics.utilization||0) > 0.7 ? 'busy' : 'healthy';
+      var sl = document.getElementById('state-label');
+      sl.textContent = state.toUpperCase(); sl.className = 'state-label state-' + state;
+
+      var toAdd = [];
+
+      snap.fleet.agents.forEach(function(agent) {
+        var id = 'a-' + agent.agent.replace(/[^a-z0-9]/gi, '_');
+        var color = AGENT_COLORS[agent.status] || AGENT_COLORS.idle;
+        var sz = agent.status === 'idle' ? 10 : 16;
+        var ex = cy.getElementById(id);
+        if (ex.length) { ex.data('color', color); ex.data('size', sz); ex.data('status', agent.status); }
+        else {
+          var pd = PROJECT_MAP.get(agent.project);
+          var ap = pd ? projectPosition(pd, W, H) : { x: W/2, y: H/2 };
+          toAdd.push({
+            data: { id: id, label: agent.agent, type: 'agent', color: color, size: sz, status: agent.status, project: agent.project },
+            position: { x: ap.x + (Math.random()-0.5)*80, y: ap.y + (Math.random()-0.5)*80 },
+          });
+          toAdd.push({ data: { id: 'anc-'+id, source: id, target: 'anchor-'+agent.project, type: 'anchor', weight: 6 } });
+          layoutPending = true;
+        }
+      });
+
+      var bp = snap.bead_projects || {};
+      (snap.beads||[]).forEach(function(b) {
+        var color = b.status === 'blocked' ? '#e74c3c' : b.status === 'in_progress' ? '#2ecc71' : '#3498db';
+        var sz = b.priority === 'P0' ? 24 : b.priority === 'P1' ? 16 : 12;
+        var proj = bp[b.id] || 'clavain';
+        var ex = cy.getElementById(b.id);
+        if (ex.length) { ex.data('color', color); ex.data('size', sz); ex.data('status', b.status); }
+        else {
+          var pd = PROJECT_MAP.get(proj);
+          var ap = pd ? projectPosition(pd, W, H) : { x: W/2, y: H/2 };
+          toAdd.push({
+            data: { id: b.id, label: b.id, type: 'bead', color: color, size: sz, status: b.status, project: proj },
+            position: { x: ap.x + (Math.random()-0.5)*80, y: ap.y + (Math.random()-0.5)*80 },
+          });
+          toAdd.push({ data: { id: 'anc-'+b.id, source: b.id, target: 'anchor-'+proj, type: 'anchor', weight: 3 } });
+          layoutPending = true;
+        }
+      });
+
+      if (toAdd.length) cy.add(toAdd);
+
+      if (layoutPending) {
+        var fixed = [];
+        ALL_PROJECTS.forEach(function(proj) { fixed.push({ nodeId: 'anchor-'+proj.id, position: projectPosition(proj, W, H) }); });
+        var hasFcose = false;
+        try { var exts = cytoscape.extensions(); hasFcose = !!(exts && exts.layout && exts.layout.fcose); } catch(e){}
+        var opts = hasFcose ? {
+          name: 'fcose', animate: false, randomize: firstUpdate,
+          fixedNodeConstraint: fixed,
+          nodeRepulsion: function(){return 3000;},
+          idealEdgeLength: function(edge){return edge.data('type')==='anchor'?20:50;},
+          edgeElasticity: function(edge){return edge.data('type')==='anchor'?0.9:0.05;},
+          gravity: 0.3, gravityRange: 3.0, numIter: firstUpdate?200:60, padding: 30, fit: firstUpdate,
+        } : {
+          name: 'cose', animate: false, randomize: firstUpdate,
+          nodeRepulsion: function(){return 3000;}, idealEdgeLength: function(){return 30;},
+          gravity: 0.5, numIter: 200, padding: 30, fit: firstUpdate,
+        };
+        cy.layout(opts).run();
+        layoutPending = false;
+        firstUpdate = false;
+      }
+    }
+
+    // =========================================
+    // INIT
+    // =========================================
+
+    function init() {
+      initGlowTextures(); resizeGlow(); createProjectLabels(); updateProjectLabels();
+      initCytoscape();
+      var pipe = new DataPipe({ generator: generateSnapshot, interval: 5000, bufferSize: 50 });
+      pipe.subscribe(applySnapshot);
+      window.addEventListener('resize', function() {
+        W = window.innerWidth; H = window.innerHeight;
+        resizeGlow(); cy.resize(); updateProjectLabels();
+        ALL_PROJECTS.forEach(function(proj) {
+          var anchor = cy.getElementById('anchor-'+proj.id);
+          if (anchor.length) anchor.position(projectPosition(proj, W, H));
+        });
+      });
+      setTimeout(function() {
+        resizeGlow(); cy.resize(); updateProjectLabels();
+        pipe.start(); requestAnimationFrame(animateGlow);
+      }, 400);
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else setTimeout(init, 100);
+  </script>
+</body>
+</html>

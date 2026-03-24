@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fixed Stars</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <!-- defer guarantees execution order: cytoscape first, fcose second -->
+  <script defer src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+  <style>
+    :root { --bg: #0a0a0a; --fg: #ccc; --dim: #555; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: var(--bg); color: var(--fg);
+      font-family: 'JetBrains Mono', monospace;
+      overflow: hidden; height: 100vh;
+    }
+
+    /* L1: Ambient glow canvas */
+    canvas#glow {
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      z-index: 0;
+    }
+    /* L2: Graph */
+    #cy {
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      z-index: 1; background: transparent;
+    }
+    /* L3: HUD */
+    .hud { position: fixed; z-index: 2; pointer-events: none; }
+    .hud-top {
+      top: 0; left: 0; right: 0;
+      display: flex; justify-content: space-between;
+      padding: 14px 24px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%);
+    }
+    .hud-bottom {
+      bottom: 0; left: 0; right: 0;
+      padding: 14px 24px;
+      background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .hud-title { font-size: 14px; letter-spacing: 3px; color: rgba(255,255,255,0.3); }
+    .hud-metrics { display: flex; gap: 20px; }
+    .hud-metric .label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.2); }
+    .hud-metric .value { font-size: 13px; color: rgba(255,255,255,0.45); margin-top: 1px; }
+    .hud-hint { font-size: 10px; color: rgba(255,255,255,0.15); }
+    .state-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+    .state-healthy  { color: rgba(46,204,113,0.5); }
+    .state-busy     { color: rgba(241,196,15,0.5); }
+    .state-degraded { color: rgba(243,156,18,0.5); }
+    .state-critical { color: rgba(231,76,60,0.6); }
+
+    /* Project labels (rendered as DOM, not Cytoscape labels) */
+    .project-label {
+      position: fixed; z-index: 3; pointer-events: none;
+      font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+      color: rgba(255,255,255,0.12);
+      white-space: nowrap;
+      transform: translate(-50%, -50%);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glow"></canvas>
+  <div id="cy"></div>
+
+  <div class="hud hud-top">
+    <div class="hud-title">FIXED STARS</div>
+    <div class="hud-metrics">
+      <div class="hud-metric"><div class="label">Projects</div><div class="value" id="m-projects">0</div></div>
+      <div class="hud-metric"><div class="label">Agents</div><div class="value" id="m-agents">0</div></div>
+      <div class="hud-metric"><div class="label">Active</div><div class="value" id="m-active">0</div></div>
+      <div class="hud-metric"><div class="label">Beads</div><div class="value" id="m-beads">0</div></div>
+    </div>
+  </div>
+  <div class="hud hud-bottom">
+    <div><span class="state-label" id="state-label">HEALTHY</span></div>
+    <div class="hud-hint">Click node to trace &middot; Dblclick reset &middot; Scroll zoom</div>
+  </div>
+
+  <script type="module">
+    import { DataPipe } from '../data-static/data-pipe.js';
+
+    // =========================================
+    // PROJECT CONSTELLATION — FIXED POSITIONS
+    // =========================================
+    // Architectural layer model:
+    //   L1 (kernel) — bottom row
+    //   L2 (OS) — middle row
+    //   L3 (apps) — top row
+    //   Interverse — peripheral ring
+    //
+    // Positions are normalized [0,1] and scaled to viewport.
+    // x spreads evenly across row, y is layer-based.
+
+    var LAYER_Y = { L1: 0.78, L2: 0.50, L3: 0.22 };
+
+    var PILLAR_PROJECTS = [
+      // L1 — kernel
+      { id: 'intercore',   label: 'Intercore',   layer: 'L1', x: 0.30 },
+      { id: 'intermute',   label: 'Intermute',   layer: 'L1', x: 0.50 },
+      { id: 'interweave',  label: 'Interweave',  layer: 'L1', x: 0.70 },
+      { id: 'interband',   label: 'Interband',   layer: 'L1', x: 0.15 },
+      { id: 'interbase',   label: 'Interbase',   layer: 'L1', x: 0.85 },
+      { id: 'marketplace', label: 'Marketplace', layer: 'L1', x: 0.10 },
+      // L2 — OS
+      { id: 'clavain',     label: 'Clavain',     layer: 'L2', x: 0.35 },
+      { id: 'skaffen',     label: 'Skaffen',     layer: 'L2', x: 0.65 },
+      { id: 'zaka',        label: 'Zaka',        layer: 'L2', x: 0.20 },
+      { id: 'alwe',        label: 'Alwe',        layer: 'L2', x: 0.80 },
+      { id: 'ockham',      label: 'Ockham',      layer: 'L2', x: 0.50 },
+      { id: 'interspect',  label: 'Interspect',  layer: 'L2', x: 0.90 },
+      // L3 — apps
+      { id: 'autarch',     label: 'Autarch',     layer: 'L3', x: 0.30 },
+      { id: 'meadowsyn',   label: 'Meadowsyn',   layer: 'L3', x: 0.50 },
+      { id: 'intercom',    label: 'Intercom',    layer: 'L3', x: 0.70 },
+      { id: 'khouri',      label: 'Khouri',      layer: 'L3', x: 0.15 },
+      { id: 'interblog',   label: 'Interblog',   layer: 'L3', x: 0.85 },
+    ];
+
+    // Interverse plugins — arranged in a peripheral ring
+    var INTERVERSE_PLUGINS = [
+      'intercache','interchart','intercheck','intercraft','interdeep','interdev',
+      'interdoc','interfluence','interflux','interform','interhelm','interject',
+      'interkasten','interknow','interlab','interlearn','interleave','interlens',
+      'interline','interlock','interlore','intermap','intermem','intermix',
+      'intermonk','intermux','intername','internext','interpath','interpeer',
+      'interphase','interplug','interpub','interpulse','interrank','interscribe',
+      'intersearch','intersense','intership','intersight','interskill','interslack',
+      'interstat','intersynth','intertest','intertrace','intertrack','intertree',
+      'intertrust','interwatch','tldr-swinton','tool-time','tuivision',
+    ];
+
+    // Place interverse plugins in elliptical ring around the periphery
+    function computeInterversePositions() {
+      var result = [];
+      var n = INTERVERSE_PLUGINS.length;
+      for (var i = 0; i < n; i++) {
+        var angle = (2 * Math.PI * i / n) - Math.PI / 2; // start from top
+        // Ellipse: wider than tall, centered at 0.5, 0.5
+        var rx = 0.44, ry = 0.40;
+        result.push({
+          id: INTERVERSE_PLUGINS[i],
+          label: INTERVERSE_PLUGINS[i],
+          layer: 'IV',
+          x: 0.50 + rx * Math.cos(angle),
+          y: 0.50 + ry * Math.sin(angle),
+        });
+      }
+      return result;
+    }
+
+    // Merge all projects into one list with absolute normalized positions
+    function getAllProjects() {
+      var all = [];
+      PILLAR_PROJECTS.forEach(function(p) {
+        all.push({ id: p.id, label: p.label, layer: p.layer, nx: p.x, ny: LAYER_Y[p.layer] });
+      });
+      computeInterversePositions().forEach(function(p) {
+        all.push({ id: p.id, label: p.label, layer: 'IV', nx: p.x, ny: p.y });
+      });
+      return all;
+    }
+
+    var ALL_PROJECTS = getAllProjects();
+    var PROJECT_MAP = new Map();
+    ALL_PROJECTS.forEach(function(p) { PROJECT_MAP.set(p.id, p); });
+
+    // Scale normalized coords to pixel positions
+    function projectPosition(p, W, H) {
+      var pad = 80;
+      return {
+        x: pad + p.nx * (W - 2 * pad),
+        y: pad + p.ny * (H - 2 * pad),
+      };
+    }
+
+    // =========================================
+    // L1: AMBIENT GLOW CANVAS (optimized)
+    // =========================================
+
+    var glowCanvas = document.getElementById('glow');
+    var glowCtx = glowCanvas.getContext('2d');
+    var W, H, dpr;
+
+    var GLOW_COLORS = {
+      idle:        { r: 60,  g: 60,  b: 60  },
+      dispatching: { r: 52,  g: 120, b: 210 },
+      executing:   { r: 46,  g: 190, b: 100 },
+      blocked:     { r: 220, g: 60,  b: 50  },
+      gated:       { r: 230, g: 150, b: 30  },
+      shipped:     { r: 40,  g: 130, b: 130 },
+    };
+
+    // Healthy = invisible: executing at 0.03, not 0.25
+    var GLOW_INTENSITY = {
+      idle: 0.02, dispatching: 0.08, executing: 0.03,
+      blocked: 0.35, gated: 0.28, shipped: 0.04,
+    };
+
+    var GLOW_RADIUS = 120;
+
+    // Pre-rendered gradient textures (one per status)
+    var glowTextures = {};
+
+    function initGlowTextures() {
+      var size = GLOW_RADIUS * 2;
+      Object.keys(GLOW_COLORS).forEach(function(status) {
+        var c = GLOW_COLORS[status];
+        var off = document.createElement('canvas');
+        off.width = size; off.height = size;
+        var ctx = off.getContext('2d');
+        var grad = ctx.createRadialGradient(GLOW_RADIUS, GLOW_RADIUS, 0,
+          GLOW_RADIUS, GLOW_RADIUS, GLOW_RADIUS);
+        grad.addColorStop(0, 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',1)');
+        grad.addColorStop(0.4, 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',0.4)');
+        grad.addColorStop(1, 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+        glowTextures[status] = off;
+      });
+
+      // Project aura texture (larger, single color)
+      var auraSize = 300;
+      var off = document.createElement('canvas');
+      off.width = auraSize; off.height = auraSize;
+      var ctx = off.getContext('2d');
+      var grad = ctx.createRadialGradient(auraSize/2, auraSize/2, 0,
+        auraSize/2, auraSize/2, auraSize/2);
+      grad.addColorStop(0, 'rgba(255,255,255,1)');
+      grad.addColorStop(0.3, 'rgba(255,255,255,0.3)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, auraSize, auraSize);
+      glowTextures._aura = off;
+    }
+
+    var glowNodes = new Map();
+    // Project-level aggregate aura state
+    var projectAuras = new Map();
+
+    function resizeGlow() {
+      dpr = window.devicePixelRatio || 1;
+      W = window.innerWidth;
+      H = window.innerHeight;
+      // Render at 0.5x for performance (glow is blurry anyway)
+      var scale = 0.5;
+      glowCanvas.width = W * dpr * scale;
+      glowCanvas.height = H * dpr * scale;
+      glowCanvas.style.width = W + 'px';
+      glowCanvas.style.height = H + 'px';
+      glowCtx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    }
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    function drawGlow() {
+      glowCtx.clearRect(0, 0, W, H);
+
+      // Draw project auras first (underneath)
+      projectAuras.forEach(function(aura) {
+        if (aura.intensity < 0.005) return;
+        var tex = glowTextures._aura;
+        var sz = 300;
+        glowCtx.globalAlpha = aura.intensity;
+        glowCtx.drawImage(tex, aura.x - sz/2, aura.y - sz/2, sz, sz);
+      });
+
+      // Draw per-node glows using pre-rendered stamps
+      glowNodes.forEach(function(g) {
+        if (g.intensity < 0.008) return; // cull invisible
+        var tex = glowTextures[g.status] || glowTextures.idle;
+        var sz = g.radius * 2;
+        glowCtx.globalAlpha = g.intensity;
+        glowCtx.drawImage(tex, g.x - g.radius, g.y - g.radius, sz, sz);
+      });
+
+      glowCtx.globalAlpha = 1;
+    }
+
+    function syncGlow() {
+      if (!cy) return;
+      cy.nodes('[type != "anchor"]').forEach(function(node) {
+        var id = node.id();
+        var pos = node.renderedPosition();
+        var status = node.data('status') || 'idle';
+        var targetIntensity = GLOW_INTENSITY[status] || GLOW_INTENSITY.idle;
+        var isBead = node.data('type') === 'bead';
+        var targetRadius = isBead ? GLOW_RADIUS * 0.5 : GLOW_RADIUS;
+        targetIntensity = isBead ? targetIntensity * 0.4 : targetIntensity;
+
+        var g = glowNodes.get(id);
+        if (!g) {
+          g = { x: pos.x, y: pos.y, radius: targetRadius, intensity: 0, status: status };
+          glowNodes.set(id, g);
+        }
+
+        var rate = 0.08;
+        g.x = lerp(g.x, pos.x, 0.2);
+        g.y = lerp(g.y, pos.y, 0.2);
+        g.intensity = lerp(g.intensity, targetIntensity, rate);
+        g.radius = lerp(g.radius, targetRadius, rate);
+        g.status = status;
+      });
+
+      glowNodes.forEach(function(_, id) {
+        if (!cy.getElementById(id).length) glowNodes.delete(id);
+      });
+
+      // Update project auras — aggregate health = % non-blocked
+      ALL_PROJECTS.forEach(function(proj) {
+        var pos = projectPosition(proj, W, H);
+        var aura = projectAuras.get(proj.id);
+        if (!aura) {
+          aura = { x: pos.x, y: pos.y, intensity: 0, blocked: 0, total: 0 };
+          projectAuras.set(proj.id, aura);
+        }
+        aura.x = pos.x;
+        aura.y = pos.y;
+        // Count agents in this project
+        var total = 0, blocked = 0;
+        cy.nodes('[project = "' + proj.id + '"]').forEach(function(n) {
+          total++;
+          if (n.data('status') === 'blocked' || n.data('status') === 'gated') blocked++;
+        });
+        aura.total = total;
+        aura.blocked = blocked;
+        // Intensity: 0.02 baseline when healthy, up to 0.15 when heavily blocked
+        var targetI = total > 0 ? 0.02 + 0.13 * (blocked / total) : 0.01;
+        aura.intensity = lerp(aura.intensity, targetI, 0.05);
+      });
+    }
+
+    function animateGlow() {
+      syncGlow();
+      drawGlow();
+      requestAnimationFrame(animateGlow);
+    }
+
+    // =========================================
+    // PROJECT LABELS (DOM overlay)
+    // =========================================
+
+    var projectLabelEls = new Map();
+
+    function createProjectLabels() {
+      // Only show pillar labels (interverse too numerous)
+      PILLAR_PROJECTS.forEach(function(proj) {
+        var el = document.createElement('div');
+        el.className = 'project-label';
+        el.textContent = proj.label;
+        document.body.appendChild(el);
+        projectLabelEls.set(proj.id, el);
+      });
+    }
+
+    function updateProjectLabels() {
+      PILLAR_PROJECTS.forEach(function(proj) {
+        var el = projectLabelEls.get(proj.id);
+        if (!el) return;
+        var pos = projectPosition(proj, W, H);
+        el.style.left = pos.x + 'px';
+        el.style.top = (pos.y - 50) + 'px';
+      });
+    }
+
+    // =========================================
+    // L2: CYTOSCAPE GRAPH
+    // =========================================
+
+    var AGENT_COLORS = {
+      idle: '#444', dispatching: '#3498db', executing: '#2ecc71',
+      blocked: '#e74c3c', gated: '#f39c12', shipped: '#1a7a7a',
+    };
+    var BEAD_COLORS = { open: '#3498db', in_progress: '#2ecc71', blocked: '#e74c3c' };
+
+    var cy;
+
+    function initCytoscape() {
+      // Ensure fCoSE is registered
+      if (window.cytoscapeFcose && !cytoscape.extensions().layout.fcose) {
+        cytoscape.use(window.cytoscapeFcose);
+      }
+
+      cy = cytoscape({
+        container: document.getElementById('cy'),
+        style: [
+          // Invisible anchor nodes
+          {
+            selector: 'node[type="anchor"]',
+            style: {
+              'width': 1, 'height': 1,
+              'opacity': 0, 'label': '',
+              'events': 'no',
+            },
+          },
+          {
+            selector: 'node[type="agent"]',
+            style: {
+              'shape': 'ellipse',
+              'label': 'data(label)',
+              'text-valign': 'bottom', 'text-halign': 'center',
+              'font-size': '9px', 'font-family': 'JetBrains Mono, monospace',
+              'color': 'rgba(255,255,255,0.5)',
+              'text-margin-y': 6,
+              'text-outline-color': 'rgba(0,0,0,0.8)', 'text-outline-width': 2,
+              'background-color': 'data(color)',
+              'width': 'data(size)', 'height': 'data(size)',
+              'border-width': 1.5, 'border-color': 'rgba(255,255,255,0.12)',
+              'overlay-opacity': 0,
+            },
+          },
+          {
+            selector: 'node[type="bead"]',
+            style: {
+              'shape': 'round-rectangle',
+              'label': 'data(label)',
+              'text-valign': 'bottom', 'text-halign': 'center',
+              'font-size': '8px', 'font-family': 'JetBrains Mono, monospace',
+              'color': 'rgba(255,255,255,0.35)',
+              'text-margin-y': 6,
+              'text-outline-color': 'rgba(0,0,0,0.8)', 'text-outline-width': 2,
+              'background-color': 'data(color)',
+              'width': 'data(size)', 'height': 'mapData(size, 20, 40, 14, 28)',
+              'border-width': 0, 'overlay-opacity': 0,
+            },
+          },
+          // Anchor edges — invisible, structural only
+          {
+            selector: 'edge[type="anchor"]',
+            style: { 'opacity': 0, 'events': 'no' },
+          },
+          {
+            selector: 'edge[type="works-on"]',
+            style: {
+              'line-color': 'rgba(255,255,255,0.07)',
+              'target-arrow-color': 'rgba(255,255,255,0.07)',
+              'target-arrow-shape': 'triangle',
+              'curve-style': 'bezier', 'width': 1.5, 'arrow-scale': 0.7,
+              'overlay-opacity': 0,
+            },
+          },
+          {
+            selector: 'edge[type="depends-on"]',
+            style: {
+              'line-color': 'rgba(100,120,200,0.08)',
+              'line-style': 'dashed',
+              'target-arrow-color': 'rgba(100,120,200,0.08)',
+              'target-arrow-shape': 'triangle',
+              'curve-style': 'bezier', 'width': 1, 'arrow-scale': 0.6,
+              'overlay-opacity': 0,
+            },
+          },
+          { selector: '.highlighted', style: { 'opacity': 1, 'z-index': 10 } },
+          { selector: '.dimmed', style: { 'opacity': 0.08 } },
+          {
+            selector: 'edge.highlighted[type="works-on"]',
+            style: { 'line-color': 'rgba(46,204,113,0.6)', 'target-arrow-color': 'rgba(46,204,113,0.6)', 'width': 2.5 },
+          },
+          {
+            selector: 'edge.highlighted[type="depends-on"]',
+            style: { 'line-color': 'rgba(74,106,219,0.5)', 'target-arrow-color': 'rgba(74,106,219,0.5)', 'width': 2 },
+          },
+        ],
+        layout: { name: 'preset' },
+        minZoom: 0.3, maxZoom: 3, wheelSensitivity: 0.3,
+      });
+
+      // Interaction: click to trace neighborhood
+      cy.on('tap', 'node[type != "anchor"]', function(evt) {
+        var node = evt.target;
+        cy.elements().addClass('dimmed');
+        var hood = node.neighborhood().add(node);
+        if (node.data('type') === 'bead') {
+          hood = hood.merge(node.successors()).merge(node.predecessors());
+        }
+        // Exclude anchor nodes/edges from highlight
+        hood = hood.filter('[type != "anchor"]');
+        hood.removeClass('dimmed').addClass('highlighted');
+      });
+      cy.on('tap', function(evt) {
+        if (evt.target === cy) cy.elements().removeClass('dimmed highlighted');
+      });
+      cy.on('dbltap', function() { cy.elements().removeClass('dimmed highlighted'); });
+
+      // Add invisible anchor nodes for all projects
+      var anchorElements = [];
+      ALL_PROJECTS.forEach(function(proj) {
+        var pos = projectPosition(proj, W, H);
+        anchorElements.push({
+          data: { id: 'anchor-' + proj.id, type: 'anchor', project: proj.id },
+          position: { x: pos.x, y: pos.y },
+        });
+      });
+      cy.add(anchorElements);
+
+      // Save positions on drag
+      cy.on('dragfree', 'node[type != "anchor"]', savePositions);
+    }
+
+    // =========================================
+    // POSITION PERSISTENCE (localStorage)
+    // =========================================
+
+    var STORAGE_KEY = 'meadowsyn-fixed-stars-positions';
+
+    function savePositions() {
+      var positions = {};
+      cy.nodes('[type != "anchor"]').forEach(function(node) {
+        var pos = node.position();
+        positions[node.id()] = { x: pos.x, y: pos.y };
+      });
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          timestamp: Date.now(),
+          positions: positions,
+        }));
+      } catch (e) { /* quota exceeded — fine, positions are non-critical */ }
+    }
+
+    function loadPositions() {
+      try {
+        var stored = localStorage.getItem(STORAGE_KEY);
+        if (!stored) return null;
+        var data = JSON.parse(stored);
+        // Stale if > 1 hour old (positions may not match current topology)
+        if (Date.now() - data.timestamp > 3600000) return null;
+        return data.positions;
+      } catch (e) { return null; }
+    }
+
+    // =========================================
+    // MOCK DATA GENERATOR
+    // =========================================
+
+    var SHIPS = [
+      'Mistake Not', 'Grey Area', 'Falling Outside', 'Sleeper Service',
+      'Just Read Instr.', 'Still Love You', 'So Much Subtlety', 'No Gravitas',
+      'Gravitas Shortfall', 'Honest Mistake', 'No More Nice Guy', 'Quietly Confident',
+      'Sense Amid Madness', 'Profit Margin', 'Limiting Factor', 'Conflict Evidence',
+      'Ethics Gradient', 'Xenophobe', 'Anticipation of Calm', 'Experiencing Sig.',
+      'Serious Callers Only', 'Orbital Delight', 'Absence of Blade', 'Not Invented Here',
+    ];
+
+    // Assign each agent to a project (some to pillars, most to interverse)
+    var AGENT_PROJECTS = new Map();
+    SHIPS.forEach(function(name, i) {
+      if (i < 4) {
+        // First 4 agents to L2 pillars
+        AGENT_PROJECTS.set(name, ['clavain', 'skaffen', 'ockham', 'zaka'][i]);
+      } else if (i < 8) {
+        // Next 4 to L1 kernel
+        AGENT_PROJECTS.set(name, ['intercore', 'intermute', 'interweave', 'interbase'][i - 4]);
+      } else if (i < 11) {
+        // Next 3 to L3 apps
+        AGENT_PROJECTS.set(name, ['autarch', 'meadowsyn', 'intercom'][i - 8]);
+      } else {
+        // Rest to interverse plugins
+        var idx = (i - 11) % INTERVERSE_PLUGINS.length;
+        AGENT_PROJECTS.set(name, INTERVERSE_PLUGINS[idx]);
+      }
+    });
+
+    var BEADS = [];
+    var BEAD_PROJECTS = new Map();
+    var beadTitles = [
+      'Auth refactor','Config migration','Test coverage','API endpoint','Cache layer',
+      'Error handling','Logging pipeline','Metrics export','Deploy pipeline','Schema update',
+      'Data export','Search index','Plugin scaffold','Hook validation','Session replay',
+      'Token budget','MCP integration','Voice profile','Skill audit','Graph render',
+    ];
+    for (var i = 0; i < 20; i++) {
+      var bid = 'Demarch-' + (1000 + i).toString(36);
+      BEADS.push({
+        id: bid,
+        title: beadTitles[i],
+        priority: i < 3 ? 'P0' : i < 8 ? 'P1' : 'P2',
+        status: Math.random() < 0.4 ? 'in_progress' : 'open',
+      });
+      // Assign beads to projects
+      var projKeys = Array.from(PROJECT_MAP.keys());
+      BEAD_PROJECTS.set(bid, projKeys[i % projKeys.length]);
+    }
+
+    var BEAD_DEPS = [
+      [BEADS[1].id, BEADS[0].id],
+      [BEADS[3].id, BEADS[2].id],
+      [BEADS[5].id, BEADS[0].id],
+      [BEADS[7].id, BEADS[6].id],
+      [BEADS[10].id, BEADS[9].id],
+    ];
+
+    var STATUSES = ['idle','dispatching','executing','blocked','gated'];
+    var STATUS_W = [0.35, 0.10, 0.35, 0.08, 0.07];
+
+    function wRand(w) {
+      var r = Math.random(), a = 0;
+      for (var i = 0; i < w.length; i++) { a += w[i]; if (r < a) return i; }
+      return w.length - 1;
+    }
+
+    var ASSIGN = new Map();
+    SHIPS.forEach(function(name) {
+      var n = Math.random() < 0.3 ? 0 : Math.random() < 0.5 ? 1 : 2;
+      var bs = [];
+      for (var j = 0; j < n; j++) {
+        var b = BEADS[Math.floor(Math.random() * BEADS.length)].id;
+        if (bs.indexOf(b) < 0) bs.push(b);
+      }
+      ASSIGN.set(name, bs);
+    });
+
+    var agentStates = new Map();
+
+    function generateSnapshot() {
+      var agents = SHIPS.map(function(name) {
+        var s = agentStates.get(name) || 'idle';
+        if (Math.random() < 0.12) s = STATUSES[wRand(STATUS_W)];
+        agentStates.set(name, s);
+        return {
+          agent: name,
+          status: s,
+          beads: ASSIGN.get(name) || [],
+          project: AGENT_PROJECTS.get(name) || 'clavain',
+        };
+      });
+      var total = agents.length;
+      var active = agents.filter(function(a) { return a.status !== 'idle'; }).length;
+      var blocked = agents.filter(function(a) { return a.status === 'blocked'; }).length;
+      return {
+        timestamp: new Date().toISOString(),
+        fleet: { total: total, active: active, agents: agents },
+        queue: { total: Math.round(15 + 8 * Math.sin(Date.now() * 0.0001) + Math.random() * 4) },
+        beads: BEADS,
+        bead_deps: BEAD_DEPS,
+        bead_projects: Object.fromEntries(BEAD_PROJECTS),
+        metrics: { utilization: active / total, errorRate: blocked / Math.max(active, 1) },
+      };
+    }
+
+    // =========================================
+    // DATA -> GRAPH
+    // =========================================
+
+    var firstUpdate = true;
+    var layoutPending = false;
+    var knownNodeIds = new Set();
+
+    function applySnapshot(snap) {
+      if (!snap || !cy) return;
+      var m = snap.metrics || {};
+
+      // HUD
+      document.getElementById('m-projects').textContent = String(ALL_PROJECTS.length);
+      document.getElementById('m-agents').textContent = String(snap.fleet.total);
+      document.getElementById('m-active').textContent = String(snap.fleet.active);
+      document.getElementById('m-beads').textContent = String((snap.beads || []).length);
+
+      var state = (m.errorRate || 0) > 0.3 ? 'critical' : (m.utilization || 0) > 0.7 ? 'busy' : 'healthy';
+      var sl = document.getElementById('state-label');
+      sl.textContent = state.toUpperCase();
+      sl.className = 'state-label state-' + state;
+
+      var toAdd = [];
+      var newIds = new Set();
+
+      // Agents
+      snap.fleet.agents.forEach(function(agent) {
+        var id = 'a-' + agent.agent.replace(/[^a-z0-9]/gi, '_');
+        newIds.add(id);
+        var color = AGENT_COLORS[agent.status] || AGENT_COLORS.idle;
+        var sz = agent.status === 'idle' ? 16 : 24;
+        var proj = agent.project || 'clavain';
+
+        var ex = cy.getElementById(id);
+        if (ex.length) {
+          ex.data('color', color);
+          ex.data('size', sz);
+          ex.data('status', agent.status);
+        } else {
+          // Seed position near project anchor
+          var projData = PROJECT_MAP.get(proj);
+          var anchorPos = projData ? projectPosition(projData, W, H) : { x: W/2, y: H/2 };
+          toAdd.push({
+            data: { id: id, label: agent.agent, type: 'agent', color: color, size: sz, status: agent.status, project: proj },
+            position: { x: anchorPos.x + (Math.random() - 0.5) * 60, y: anchorPos.y + (Math.random() - 0.5) * 60 },
+          });
+          // Edge to project anchor
+          toAdd.push({
+            data: { id: 'anc-' + id, source: id, target: 'anchor-' + proj, type: 'anchor', weight: 8 },
+          });
+          layoutPending = true;
+        }
+
+        // Work edges
+        (agent.beads || []).forEach(function(bid) {
+          var eid = id + '->' + bid;
+          if (!cy.getElementById(eid).length) {
+            toAdd.push({ data: { id: eid, source: id, target: bid, type: 'works-on' } });
+          }
+        });
+      });
+
+      // Beads
+      var beadProjects = snap.bead_projects || {};
+      (snap.beads || []).forEach(function(b) {
+        newIds.add(b.id);
+        var color = BEAD_COLORS[b.status] || BEAD_COLORS.open;
+        var sz = b.priority === 'P0' ? 36 : b.priority === 'P1' ? 26 : 18;
+        var proj = beadProjects[b.id] || 'clavain';
+
+        var ex = cy.getElementById(b.id);
+        if (ex.length) {
+          ex.data('color', color);
+          ex.data('size', sz);
+          ex.data('status', b.status);
+        } else {
+          var projData = PROJECT_MAP.get(proj);
+          var anchorPos = projData ? projectPosition(projData, W, H) : { x: W/2, y: H/2 };
+          toAdd.push({
+            data: { id: b.id, label: b.id, type: 'bead', color: color, size: sz, status: b.status, project: proj },
+            position: { x: anchorPos.x + (Math.random() - 0.5) * 40, y: anchorPos.y + (Math.random() - 0.5) * 40 },
+          });
+          // Edge to project anchor
+          toAdd.push({
+            data: { id: 'anc-' + b.id, source: b.id, target: 'anchor-' + proj, type: 'anchor', weight: 5 },
+          });
+          layoutPending = true;
+        }
+      });
+
+      // Dependency edges
+      (snap.bead_deps || []).forEach(function(d) {
+        var eid = 'dep-' + d[0] + '->' + d[1];
+        if (!cy.getElementById(eid).length) {
+          toAdd.push({ data: { id: eid, source: d[0], target: d[1], type: 'depends-on' } });
+        }
+      });
+
+      // Remove departed nodes
+      knownNodeIds.forEach(function(id) {
+        if (!newIds.has(id) && cy.getElementById(id).length) {
+          cy.remove(cy.getElementById(id));
+          layoutPending = true;
+        }
+      });
+      knownNodeIds = newIds;
+
+      if (toAdd.length) cy.add(toAdd);
+
+      if (layoutPending) {
+        runLayout();
+        layoutPending = false;
+      }
+    }
+
+    // =========================================
+    // fCoSE LAYOUT with fixed anchors
+    // =========================================
+
+    function runLayout() {
+      // Build fixedNodeConstraint for all anchor nodes
+      var fixed = [];
+      ALL_PROJECTS.forEach(function(proj) {
+        var pos = projectPosition(proj, W, H);
+        fixed.push({ nodeId: 'anchor-' + proj.id, position: pos });
+      });
+
+      // Restore saved positions if available (first layout only)
+      var savedPos = firstUpdate ? loadPositions() : null;
+      if (savedPos) {
+        cy.nodes('[type != "anchor"]').forEach(function(node) {
+          var sp = savedPos[node.id()];
+          if (sp) node.position(sp);
+        });
+      }
+
+      // Detect fCoSE availability
+      var hasFcose = false;
+      try {
+        var exts = cytoscape.extensions();
+        hasFcose = !!(exts && exts.layout && exts.layout.fcose);
+      } catch (e) {}
+
+      var layoutOpts;
+      if (hasFcose) {
+        layoutOpts = {
+          name: 'fcose',
+          animate: !firstUpdate,
+          animationDuration: 600,
+          randomize: firstUpdate && !savedPos,
+          fixedNodeConstraint: fixed,
+          // Tight clustering: short anchor edges, strong elasticity
+          nodeRepulsion: function() { return 4500; },
+          idealEdgeLength: function(edge) {
+            if (edge.data('type') === 'anchor') return 30;
+            if (edge.data('type') === 'works-on') return 60;
+            return 80;
+          },
+          edgeElasticity: function(edge) {
+            return edge.data('type') === 'anchor' ? 0.8 : 0.1;
+          },
+          gravity: 0.25,
+          gravityRange: 3.0,
+          numIter: firstUpdate ? 250 : 100,
+          padding: 40,
+          fit: firstUpdate,
+          stop: function() { savePositions(); },
+        };
+      } else {
+        // Fallback cose layout
+        layoutOpts = {
+          name: 'cose',
+          animate: !firstUpdate,
+          animationDuration: 600,
+          randomize: firstUpdate && !savedPos,
+          nodeRepulsion: function() { return 6000; },
+          idealEdgeLength: function() { return 60; },
+          gravity: 0.4,
+          numIter: 250,
+          padding: 40,
+          fit: firstUpdate,
+          stop: function() { savePositions(); },
+        };
+      }
+
+      cy.layout(layoutOpts).run();
+
+      firstUpdate = false;
+    }
+
+    // =========================================
+    // INIT
+    // =========================================
+
+    function init() {
+      initGlowTextures();
+      resizeGlow();
+      createProjectLabels();
+      updateProjectLabels();
+      initCytoscape();
+
+      var pipe = new DataPipe({
+        generator: generateSnapshot,
+        interval: 4000,
+        bufferSize: 100,
+      });
+      pipe.subscribe(applySnapshot);
+
+      window.addEventListener('resize', function() {
+        W = window.innerWidth;
+        H = window.innerHeight;
+        resizeGlow();
+        cy.resize();
+        updateProjectLabels();
+        // Reposition anchors on resize
+        ALL_PROJECTS.forEach(function(proj) {
+          var pos = projectPosition(proj, W, H);
+          var anchor = cy.getElementById('anchor-' + proj.id);
+          if (anchor.length) anchor.position(pos);
+        });
+      });
+
+      setTimeout(function() {
+        resizeGlow();
+        cy.resize();
+        updateProjectLabels();
+        pipe.start();
+        requestAnimationFrame(animateGlow);
+      }, 400);
+    }
+
+    // Wait for defer scripts to load
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      // Scripts with defer execute before DOMContentLoaded, but module scripts
+      // are deferred by default. Use a small delay to ensure cytoscape + fcose are ready.
+      setTimeout(init, 100);
+    }
+  </script>
+</body>
+</html>
