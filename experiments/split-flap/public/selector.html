@@ -319,6 +319,38 @@
         tech: 'Canvas 2D optimized, drawImage stamps, 500 nodes',
         url: '/ambient-v2/',
       },
+      {
+        id: 'semantic-zoom',
+        name: 'Semantic Zoom',
+        tag: 'F12 — LOD Tiers',
+        desc: 'Three levels of detail driven by zoom. LOD 0: project auras only (calm). LOD 1: agent nodes fade in. LOD 2: beads + dependency edges appear. Overview first, details on demand.',
+        tech: 'Cytoscape.js zoom events, opacity transitions, LOD state machine',
+        url: '/semantic-zoom/',
+      },
+      {
+        id: 'delta-layer',
+        name: 'Delta Layer',
+        tag: 'F15 — Awareness',
+        desc: 'Returning viewer layer. Pulsing yellow halos mark nodes that changed since your last visit. Halo intensity decays over 5 minutes. Press R to reset baseline.',
+        tech: 'localStorage timestamps, Canvas halo overlay, decay animation',
+        url: '/delta-layer/',
+      },
+      {
+        id: 'causal-chain',
+        name: 'Causal Chain',
+        tag: 'F16 — Traversal',
+        desc: 'Click any node to trace its full causal chain. Predecessors and successors highlighted with golden edges. Animated particles flow along the chain. Info panel shows the chain as a list.',
+        tech: 'Cytoscape predecessors/successors, Canvas particle system, DOM panel',
+        url: '/causal-chain/',
+      },
+      {
+        id: 'loopy-overlay',
+        name: 'Loopy Overlay',
+        tag: 'F17 — Systems',
+        desc: 'Press L to toggle a causal loop diagram overlay on top of the graph. Macro (CLD) and micro (graph) views of the same factory system. SVG particles trace the feedback loops.',
+        tech: 'SVG CLD overlay, getPointAtLength particles, dual-view',
+        url: '/loopy-overlay/',
+      },
     ];
 
     var gallery = document.getElementById('gallery');
