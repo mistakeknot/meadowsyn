@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Real Data</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <script defer src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+  <style>
+    :root { --bg: #0a0a0a; --fg: #ccc; --dim: #555; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', monospace; overflow: hidden; height: 100vh; }
+    canvas#glow { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; }
+    #cy { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: transparent; }
+    .hud { position: fixed; z-index: 2; pointer-events: none; }
+    .hud-top { top: 0; left: 0; right: 0; display: flex; justify-content: space-between; padding: 14px 24px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%); }
+    .hud-bottom { bottom: 0; left: 0; right: 0; padding: 14px 24px;
+      background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
+      display: flex; justify-content: space-between; align-items: center; }
+    .hud-title { font-size: 14px; letter-spacing: 3px; color: rgba(255,255,255,0.3); }
+    .hud-metrics { display: flex; gap: 20px; }
+    .hud-metric .label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.2); }
+    .hud-metric .value { font-size: 13px; color: rgba(255,255,255,0.45); margin-top: 1px; }
+    .hud-hint { font-size: 10px; color: rgba(255,255,255,0.15); }
+    .state-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+    .state-healthy { color: rgba(46,204,113,0.5); }
+    .state-busy { color: rgba(241,196,15,0.5); }
+    .state-critical { color: rgba(231,76,60,0.6); }
+    .source-badge { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 3;
+      font-size: 10px; letter-spacing: 2px; pointer-events: none; }
+    .source-live { color: rgba(46,204,113,0.5); }
+    .source-mock { color: rgba(241,196,15,0.5); }
+    .source-stale { color: rgba(231,76,60,0.5); }
+    .project-label { position: fixed; z-index: 3; pointer-events: none;
+      font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.12);
+      white-space: nowrap; transform: translate(-50%, -50%); }
+  </style>
+</head>
+<body>
+  <canvas id="glow"></canvas>
+  <div id="cy"></div>
+
+  <div class="hud hud-top">
+    <div class="hud-title">REAL DATA</div>
+    <div class="hud-metrics">
+      <div class="hud-metric"><div class="label">Agents</div><div class="value" id="m-agents">0</div></div>
+      <div class="hud-metric"><div class="label">Active</div><div class="value" id="m-active">0</div></div>
+      <div class="hud-metric"><div class="label">Queue</div><div class="value" id="m-queue">0</div></div>
+      <div class="hud-metric"><div class="label">Util</div><div class="value" id="m-util">0%</div></div>
+    </div>
+  </div>
+
+  <div class="source-badge" id="source-badge">CONNECTING...</div>
+
+  <div class="hud hud-bottom">
+    <div><span class="state-label" id="state-label">HEALTHY</span></div>
+    <div class="hud-hint">Live factory data via clavain-cli &middot; Run generate-snapshot.sh to refresh &middot; Click to trace</div>
+  </div>
+
+  <script type="module">
+    import { DataPipe } from '../data-static/data-pipe.js';
+
+    // =========================================
+    // PROJECT CONSTELLATION
+    // =========================================
+    var LAYER_Y = { L1: 0.78, L2: 0.50, L3: 0.22 };
+    var PILLAR_PROJECTS = [
+      { id: 'intercore', label: 'Intercore', layer: 'L1', x: 0.30 },
+      { id: 'intermute', label: 'Intermute', layer: 'L1', x: 0.50 },
+      { id: 'interweave', label: 'Interweave', layer: 'L1', x: 0.70 },
+      { id: 'interband', label: 'Interband', layer: 'L1', x: 0.15 },
+      { id: 'interbase', label: 'Interbase', layer: 'L1', x: 0.85 },
+      { id: 'clavain', label: 'Clavain', layer: 'L2', x: 0.30 },
+      { id: 'skaffen', label: 'Skaffen', layer: 'L2', x: 0.55 },
+      { id: 'zaka', label: 'Zaka', layer: 'L2', x: 0.15 },
+      { id: 'alwe', label: 'Alwe', layer: 'L2', x: 0.75 },
+      { id: 'ockham', label: 'Ockham', layer: 'L2', x: 0.42 },
+      { id: 'interspect', label: 'Interspect', layer: 'L2', x: 0.90 },
+      { id: 'autarch', label: 'Autarch', layer: 'L3', x: 0.25 },
+      { id: 'meadowsyn', label: 'Meadowsyn', layer: 'L3', x: 0.50 },
+      { id: 'intercom', label: 'Intercom', layer: 'L3', x: 0.70 },
+      { id: 'khouri', label: 'Khouri', layer: 'L3', x: 0.10 },
+    ];
+    // Catch-all for agents not matching a specific project
+    var DEFAULT_PROJECT = { id: 'demarch', label: 'Demarch', nx: 0.50, ny: 0.50 };
+
+    var ALL_PROJECTS = [];
+    PILLAR_PROJECTS.forEach(function(p) {
+      ALL_PROJECTS.push({ id: p.id, label: p.label, nx: p.x, ny: LAYER_Y[p.layer] });
+    });
+    ALL_PROJECTS.push(DEFAULT_PROJECT);
+    var PROJECT_MAP = new Map();
+    ALL_PROJECTS.forEach(function(p) { PROJECT_MAP.set(p.id, p); });
+
+    function projectPosition(p, vW, vH) {
+      var pad = 80;
+      return { x: pad + p.nx * (vW - 2 * pad), y: pad + p.ny * (vH - 2 * pad) };
+    }
+
+    // =========================================
+    // GLOW
+    // =========================================
+    var glowCanvas = document.getElementById('glow'), glowCtx = glowCanvas.getContext('2d');
+    var W, H, dpr;
+    var GLOW_COLORS = { idle:{r:60,g:60,b:60}, executing:{r:46,g:190,b:100}, blocked:{r:220,g:60,b:50}, gated:{r:230,g:150,b:30} };
+    var GLOW_INTENSITY = { idle: 0.02, executing: 0.03, blocked: 0.35, gated: 0.28 };
+    var GLOW_RADIUS = 100, glowTextures = {}, glowNodes = new Map();
+
+    function initGlowTextures() {
+      var size = GLOW_RADIUS * 2;
+      Object.keys(GLOW_COLORS).forEach(function(s) {
+        var c = GLOW_COLORS[s], off = document.createElement('canvas');
+        off.width = size; off.height = size;
+        var ctx = off.getContext('2d');
+        var g = ctx.createRadialGradient(GLOW_RADIUS, GLOW_RADIUS, 0, GLOW_RADIUS, GLOW_RADIUS, GLOW_RADIUS);
+        g.addColorStop(0, 'rgba('+c.r+','+c.g+','+c.b+',1)');
+        g.addColorStop(0.4, 'rgba('+c.r+','+c.g+','+c.b+',0.4)');
+        g.addColorStop(1, 'rgba('+c.r+','+c.g+','+c.b+',0)');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, size, size);
+        glowTextures[s] = off;
+      });
+    }
+
+    function resizeGlow() {
+      dpr = window.devicePixelRatio || 1; W = window.innerWidth; H = window.innerHeight;
+      glowCanvas.width = W*dpr*0.5; glowCanvas.height = H*dpr*0.5;
+      glowCanvas.style.width = W+'px'; glowCanvas.style.height = H+'px';
+      glowCtx.setTransform(dpr*0.5, 0, 0, dpr*0.5, 0, 0);
+    }
+
+    function lerp(a,b,t) { return a+(b-a)*t; }
+
+    function drawGlow() {
+      glowCtx.clearRect(0, 0, W, H);
+      glowNodes.forEach(function(g) {
+        if (g.intensity < 0.008) return;
+        var tex = glowTextures[g.status] || glowTextures.idle;
+        if (!tex) return;
+        glowCtx.globalAlpha = g.intensity;
+        glowCtx.drawImage(tex, g.x-g.radius, g.y-g.radius, g.radius*2, g.radius*2);
+      });
+      glowCtx.globalAlpha = 1;
+    }
+
+    function syncGlow() {
+      if (!cy) return;
+      cy.nodes('[type != "anchor"]').forEach(function(n) {
+        var id = n.id(), pos = n.renderedPosition(), s = n.data('status') || 'idle';
+        var ti = GLOW_INTENSITY[s] || 0.02;
+        var g = glowNodes.get(id);
+        if (!g) { g = { x: pos.x, y: pos.y, radius: GLOW_RADIUS, intensity: 0, status: s }; glowNodes.set(id, g); }
+        g.x = lerp(g.x, pos.x, 0.15); g.y = lerp(g.y, pos.y, 0.15);
+        g.intensity = lerp(g.intensity, ti, 0.06); g.status = s;
+      });
+      glowNodes.forEach(function(_, id) { if (!cy.getElementById(id).length) glowNodes.delete(id); });
+    }
+
+    function animate() { syncGlow(); drawGlow(); requestAnimationFrame(animate); }
+
+    function createProjectLabels() {
+      PILLAR_PROJECTS.forEach(function(p) {
+        var el = document.createElement('div'); el.className = 'project-label';
+        el.textContent = p.label; document.body.appendChild(el);
+      });
+    }
+    function updateProjectLabels() {
+      var labels = document.querySelectorAll('.project-label');
+      PILLAR_PROJECTS.forEach(function(p, i) {
+        if (labels[i]) {
+          var proj = PROJECT_MAP.get(p.id);
+          var pos = projectPosition(proj, W, H);
+          labels[i].style.left = pos.x + 'px'; labels[i].style.top = (pos.y - 45) + 'px';
+        }
+      });
+    }
+
+    // =========================================
+    // CYTOSCAPE
+    // =========================================
+    var AGENT_COLORS = { idle: '#333', executing: '#2ecc71', blocked: '#e74c3c', gated: '#f39c12' };
+    var cy;
+
+    function initCytoscape() {
+      if (window.cytoscapeFcose && typeof cytoscape !== 'undefined') {
+        try { var e = cytoscape.extensions(); if (!(e && e.layout && e.layout.fcose)) cytoscape.use(window.cytoscapeFcose); } catch(x) {}
+      }
+      cy = cytoscape({
+        container: document.getElementById('cy'),
+        style: [
+          { selector: 'node[type="anchor"]', style: { 'width':1,'height':1,'opacity':0,'label':'','events':'no' } },
+          { selector: 'node[type="agent"]', style: {
+            'shape': 'ellipse', 'label': 'data(label)',
+            'text-valign': 'bottom', 'text-halign': 'center',
+            'font-size': '8px', 'font-family': 'JetBrains Mono, monospace',
+            'color': 'rgba(255,255,255,0.4)', 'text-margin-y': 5,
+            'text-outline-color': 'rgba(0,0,0,0.8)', 'text-outline-width': 2,
+            'background-color': 'data(color)', 'width': 'data(size)', 'height': 'data(size)',
+            'border-width': 1, 'border-color': 'rgba(255,255,255,0.1)', 'overlay-opacity': 0,
+          }},
+          { selector: 'edge[type="anchor"]', style: { 'opacity': 0, 'events': 'no' } },
+          { selector: '.highlighted', style: { 'opacity': 1, 'z-index': 10 } },
+          { selector: '.dimmed', style: { 'opacity': 0.08 } },
+        ],
+        layout: { name: 'preset' },
+        minZoom: 0.3, maxZoom: 3, wheelSensitivity: 0.3,
+      });
+
+      cy.on('tap', 'node[type != "anchor"]', function(evt) {
+        var n = evt.target; cy.elements().addClass('dimmed');
+        n.neighborhood().add(n).filter('[type != "anchor"]').removeClass('dimmed').addClass('highlighted');
+      });
+      cy.on('tap', function(evt) { if (evt.target === cy) cy.elements().removeClass('dimmed highlighted'); });
+
+      ALL_PROJECTS.forEach(function(p) {
+        cy.add({ data: { id: 'anchor-'+p.id, type: 'anchor' }, position: projectPosition(p, W, H) });
+      });
+    }
+
+    // =========================================
+    // DATA -> GRAPH
+    // =========================================
+    var firstUpdate = true, layoutPending = false;
+
+    function applySnapshot(snap) {
+      if (!snap || !cy) return;
+      var m = snap.metrics || {};
+
+      // Source indicator
+      var badge = document.getElementById('source-badge');
+      if (snap.source === 'live') {
+        badge.textContent = 'LIVE'; badge.className = 'source-badge source-live';
+      } else {
+        badge.textContent = 'MOCK'; badge.className = 'source-badge source-mock';
+      }
+
+      // HUD
+      document.getElementById('m-agents').textContent = String(snap.fleet.total || 0);
+      document.getElementById('m-active').textContent = String(snap.fleet.active || 0);
+      document.getElementById('m-queue').textContent = String((snap.queue || {}).total || 0);
+      document.getElementById('m-util').textContent = Math.round((m.utilization || 0) * 100) + '%';
+
+      var state = (m.utilization || 0) > 0.7 ? 'busy' : 'healthy';
+      var sl = document.getElementById('state-label');
+      sl.textContent = state.toUpperCase(); sl.className = 'state-label state-' + state;
+
+      var toAdd = [];
+      (snap.fleet.agents || []).forEach(function(agent) {
+        var id = 'a-' + agent.agent.replace(/[^a-z0-9]/gi, '_');
+        var color = AGENT_COLORS[agent.status] || AGENT_COLORS.idle;
+        var sz = agent.status === 'idle' ? 14 : 22;
+        var proj = agent.project || 'demarch';
+        // Ensure project anchor exists
+        if (!PROJECT_MAP.has(proj)) proj = 'demarch';
+
+        var ex = cy.getElementById(id);
+        if (ex.length) {
+          ex.data('color', color); ex.data('size', sz); ex.data('status', agent.status);
+        } else {
+          var pd = PROJECT_MAP.get(proj);
+          var ap = pd ? projectPosition(pd, W, H) : { x: W/2, y: H/2 };
+          toAdd.push({
+            data: { id: id, label: agent.agent, type: 'agent', color: color, size: sz, status: agent.status, project: proj },
+            position: { x: ap.x + (Math.random()-0.5)*50, y: ap.y + (Math.random()-0.5)*50 },
+          });
+          toAdd.push({ data: { id: 'anc-'+id, source: id, target: 'anchor-'+proj, type: 'anchor', weight: 8 } });
+          layoutPending = true;
+        }
+      });
+
+      if (toAdd.length) cy.add(toAdd);
+      if (layoutPending) {
+        var fixed = [];
+        ALL_PROJECTS.forEach(function(p) { fixed.push({ nodeId: 'anchor-'+p.id, position: projectPosition(p, W, H) }); });
+        var hf = false;
+        try { var e = cytoscape.extensions(); hf = !!(e && e.layout && e.layout.fcose); } catch(x) {}
+        cy.layout(hf ? {
+          name: 'fcose', animate: !firstUpdate, animationDuration: 600, randomize: firstUpdate,
+          fixedNodeConstraint: fixed, nodeRepulsion: function(){return 4000;},
+          idealEdgeLength: function(e){return e.data('type')==='anchor'?25:50;},
+          edgeElasticity: function(e){return e.data('type')==='anchor'?0.9:0.1;},
+          gravity: 0.3, gravityRange: 3.0, numIter: firstUpdate?250:100, padding: 40, fit: firstUpdate,
+        } : {
+          name: 'cose', animate: !firstUpdate, randomize: firstUpdate,
+          nodeRepulsion: function(){return 5000;}, idealEdgeLength: function(){return 40;},
+          gravity: 0.5, numIter: 250, padding: 40, fit: firstUpdate,
+        }).run();
+        layoutPending = false; firstUpdate = false;
+      }
+    }
+
+    // =========================================
+    // INIT — polls snapshot.json, falls back to mock
+    // =========================================
+    function init() {
+      initGlowTextures(); resizeGlow(); createProjectLabels(); updateProjectLabels();
+      initCytoscape();
+
+      // DataPipe: try to fetch live snapshot.json, fall back to mock
+      var pipe = new DataPipe({
+        url: './snapshot.json',
+        interval: 5000,
+        bufferSize: 100,
+      });
+      pipe.subscribe(applySnapshot);
+
+      window.addEventListener('resize', function() {
+        W = window.innerWidth; H = window.innerHeight;
+        resizeGlow(); cy.resize(); updateProjectLabels();
+        ALL_PROJECTS.forEach(function(p) {
+          var a = cy.getElementById('anchor-'+p.id);
+          if (a.length) a.position(projectPosition(p, W, H));
+        });
+      });
+
+      setTimeout(function() {
+        resizeGlow(); cy.resize(); updateProjectLabels();
+        pipe.start(); requestAnimationFrame(animate);
+      }, 400);
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else setTimeout(init, 100);
+  </script>
+</body>
+</html>

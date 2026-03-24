@@ -1,0 +1,447 @@
+{
+  "timestamp": "2026-03-24T06:41:07Z",
+  "fleet": {
+    "total": 61,
+    "active": 24,
+    "agents": [
+      {
+        "agent": "/warp//demarch///core@claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "/warp//demarch///meadowsyn@cla",
+        "status": "idle",
+        "project": "meadowsyn",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "/warp//demarch///sprint@claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "[alacritty[[agmodb@claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "[warp[[clavain@claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "[warp[[demarch[[[debug@claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "\\alacritty\\\\naradan\\\\\\readsear",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "]warp]]demarch]]]interblog@cla",
+        "status": "idle",
+        "project": "interblog",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "admin",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "alacritty-agmodb-codex",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "alacritty-naradan-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "alacritty-prosa-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "beads-migrate-dolt",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "claude-work",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "devops",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "ghostty-f3ar-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "ghostty-shadow-work-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-agent-fortress-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-agent-fortress-game",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-agentmud-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-agentmud-game",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-demarch/khouri-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-dermarch/attp-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-duellm-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-elf-revel-game",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-elf-revel-sim-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-elf-revel-ux-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "iterm-pattern-royale-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "kitty-jawncloud-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "kitty-ong-lots-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "main",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rhapsode-bot",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-auraken-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-auraken-rename-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-intercom-codex",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-nartopo-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-nartopo-claude-2",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-nartopo-codex",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-nartopo-gemini",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-stakeholders-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "rio-stakeholders-gemini",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "typhon-shadow",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-autarch-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-clavain-codex",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-debug-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-demarch-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-demarch-codex",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-demarch-debug-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-demarch-gemini",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-demarch-lab-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-demarch-research-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-intercom-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-interkasten-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-masaq-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-skaffen-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "warp-skaffen-skaffen",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "wezterm-mediumsetting-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "wezterm-mediumsetting-codex",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "wezterm-typhon-claude",
+        "status": "executing",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "wezterm-typhon-codex",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      },
+      {
+        "agent": "zed-writing-claude",
+        "status": "idle",
+        "project": "clavain",
+        "agentType": "claude",
+        "beads": []
+      }
+    ]
+  },
+  "queue": {
+    "total": 0
+  },
+  "beads": [],
+  "bead_deps": [],
+  "bead_projects": {},
+  "metrics": {
+    "utilization": 0.39344262295081966,
+    "errorRate": 0
+  },
+  "source": "live"
+}
