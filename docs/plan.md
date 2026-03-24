@@ -2,115 +2,191 @@
 artifact_type: plan
 bead: Demarch-jpum
 prd: docs/prds/2026-03-21-meadowsyn-experiments.md
-stage: planned
+stage: plan-reviewed
+review_findings: .claude/flux-drive-output/fd-{experiment-feasibility,dependency-ordering,tech-stack-viability,scope-containment,acceptance-criteria-quality,composition-architecture}.md
 ---
 
-# Plan: Meadowsyn Experiment Suite
+# Plan: Meadowsyn Experiment Suite (v2 — post-review)
 
-## Dependency Graph
+## Changes from v1
+
+Incorporated findings from 6 review agents (4 P0, 11 P1):
+- **P0-1**: Added `serve.sh` — `file://` blocks ES module imports
+- **P0-2**: Added F0 (shared contracts) — plugin interface must exist before Batch 2
+- **P0-3**: Fixed dependency graph — F8 and F9 are parallel, not sequential
+- **P0-4**: DataPipe separates transport from history — switching transport preserves state
+- **P1**: Dropped PM4JS (use D3), dropped EventDrops (use vis-timeline), trimmed F6/F7/F4/F10/F2/F9 scope, flagged hydra-synth AGPL, added JSON Schema extraction, fixed F10 websocket contradiction
+
+## Dependency Graph (corrected)
 
 ```
-F1 (Mock Data) ← F2 (Split-Flap)
-               ← F3 (Hydra Ambient)
-               ← F4 (Cytoscape Graph)
-               ← F5 (Raster Heatmap)
-               ← F6 (Loopy Signals)
-               ← F7 (Process Replay)
-               ← F8 (Static JSON Pipe)
+F0 (Shared Contracts) ← F1 (Mock Data)
+                      ← F8 (Static JSON Pipe)
+                      ← F9 (SSE Pipe)          [F8 and F9 are PARALLEL]
 
-F8 (Static JSON) ← F9 (SSE Pipe) [same interface, different transport]
+F0 + F1 + F8 ← F2 (Split-Flap)
+             ← F3 (Hydra Ambient)
+             ← F4 (Cytoscape Graph)
+             ← F5 (Raster Heatmap)
+             ← F6 (Loopy Signals)
+             ← F7 (Process Replay)
 
-F1 + F8 ← F10 (Composition Shell) [needs at least one visual + one data pipe]
+F0 + any 2 visuals + any 1 data pipe ← F10 (Composition Shell)
 ```
 
-F1 (mock data) is the critical path — everything depends on it. F2-F7 and F8 are independent and parallelizable. F9 extends F8's interface. F10 composes everything.
+F0 is the new critical path (~30 min). F1, F8, F9 depend only on F0 and are parallel. All visuals depend on F0+F1+F8. F10 depends on F0 + working examples.
+
+## Dev Server Requirement
+
+`file://` blocks ES module cross-directory imports (CORS null origin). All experiments require a local HTTP server.
+
+```
+apps/Meadowsyn/serve.sh:
+  #!/bin/bash
+  # One-liner dev server for all experiments
+  cd "$(dirname "$0")" && npx serve -l 3000 -s .
+```
+
+Document in README: `./serve.sh` then open `http://localhost:3000/experiments/<name>/`.
 
 ## Execution Sequence
 
-### Batch 1: Foundation (sequential, ~1 hour)
+### Batch 0: Shared Contracts (~30 min)
+
+**F0: Shared Contracts** (no bead — part of Demarch-jpum)
+
+Location: `apps/Meadowsyn/shared/`
+
+```
+shared/
+  plugin.js         # Plugin interface contract
+  data-pipe.js      # DataPipe base class with transport/history separation
+  constants.js      # Colors, status vocabulary, formatters
+  schema/
+    factory-status.schema.json  # Extracted from clavain-cli Go structs
+```
+
+Implementation:
+
+1. **Plugin interface contract** (addresses P0-2, P1-8):
+   ```js
+   // Every visual experiment exports this shape
+   export default {
+     name: 'split-flap',
+     // Phase 1: create internal state, don't render yet
+     init(container, dataPipe, options) { return instance },
+     // Phase 2: start rendering (container dimensions are settled)
+     activate(instance) {},
+     // Pause rendering (rAF loops, timers) without destroying state
+     deactivate(instance) {},
+     // Container resized
+     resize(instance, { width, height }) {},
+     // Tear down completely
+     destroy(instance) {},
+   }
+   ```
+
+2. **DataPipe with transport/history separation** (addresses P0-4):
+   ```js
+   class DataPipe {
+     constructor({ transport, bufferSize = 720 }) // transport is pluggable
+     subscribe(callback) / unsubscribe(callback)
+     getHistory()   // returns ring buffer (preserved across transport swaps)
+     getLatest()
+     isStale()
+     setTransport(newTransport)  // swap without clearing history
+   }
+   // Transport implementations:
+   class FetchTransport { constructor(url, interval) }
+   class SSETransport { constructor(url) }
+   class MockTransport { constructor(options) }
+   ```
+
+3. **Shared constants** (addresses P1-scope):
+   ```js
+   export const STATUS_COLORS = {
+     idle: '#808080', executing: '#4caf50', dispatching: '#2196f3',
+     blocked: '#f44336', gated: '#ff9800',
+   }
+   export const STATUS_ORDER = ['blocked','gated','executing','dispatching','idle']
+   export function formatAgentName(name, maxLen = 12) { ... }
+   export function formatDuration(seconds) { ... }
+   ```
+
+4. **JSON Schema** extracted from `clavain-cli factory-status --json` output (addresses SC1).
+
+### Batch 1: Foundation (~1 hour, parallel after F0)
 
 **F1: Mock Data Generator** (Demarch-ef08)
 
 Location: `apps/Meadowsyn/experiments/mock-data/`
 
-```
-mock-data/
-  index.js          # Node.js script
-  package.json
-```
-
 Implementation:
-1. Single Node.js script that outputs factory-status JSON to stdout
-2. Agent name pool: 20 Culture ship names (Mistake Not..., Grey Area, etc.)
-3. Bead ID pool: mock Demarch-xxxx IDs with realistic titles
-4. `--agents N` flag (default 20)
-5. `--stream` flag: emit one JSON line per second with evolving state
-6. State machine per agent: idle -> dispatching -> executing -> (gated -> shipped | reworked -> idle)
-7. Realistic distributions: 60% idle, 15% dispatching, 20% executing, 5% blocked
-8. Queue depth fluctuates sinusoidally with noise (simulates work arrival)
-9. Export as ES module too: `import { generateSnapshot, createStream } from './index.js'`
+1. Node.js script outputting factory-status JSON to stdout
+2. **Also reads `transfer/ideagui.json`** as seed data for realistic agent names, project names, and session patterns (84 sessions, 42 projects, 9 terminals)
+3. `--agents N` flag (default 20), `--stream` flag (one JSON/sec)
+4. State machine per agent: idle -> dispatching -> executing -> (gated -> shipped | reworked -> idle)
+5. Distributions: 60% idle, 15% dispatching, 20% executing, 5% blocked
+6. Validates output against `shared/schema/factory-status.schema.json`
+7. ES module export: `import { generateSnapshot, createStream } from './index.js'`
 
 **F8: Static JSON Data Pipe** (Demarch-lavt)
 
 Location: `apps/Meadowsyn/experiments/data-static/`
 
-```
-data-static/
-  data-pipe.js      # ES module: DataPipe class
-  index.html        # Test harness
-```
+Implementation:
+1. Thin wrapper: `new FetchTransport(url, interval)` implementing the transport interface from F0
+2. Test harness (`index.html`): raw JSON display + stale indicator + snapshot counter
+3. Imports `DataPipe` + `FetchTransport` from `../../shared/data-pipe.js`
+
+**F9: SSE Data Pipe** (Demarch-p83z) — **parallel with F8, not sequential**
+
+Location: `apps/Meadowsyn/experiments/data-sse/`
 
 Implementation:
-1. `DataPipe` class: `new DataPipe({ url, interval, bufferSize })`
-2. `subscribe(callback)` / `unsubscribe(callback)` pattern
-3. Ring buffer: `getHistory()` returns last N snapshots
-4. `getLatest()` returns current snapshot
-5. Fetch with retry (exponential backoff, max 30s)
-6. Stale indicator: `isStale()` true if last successful fetch > 3x interval
-7. Works with `file://` (via imported mock data) and `https://` (via fetch)
-8. Test harness: raw JSON display + stale indicator + snapshot counter
+1. Node.js server (bare http), < 150 lines
+2. Polls `clavain-cli factory-status --json` every 5s (uses `execFile`, not `exec`)
+3. `GET /events` — SSE endpoint: full snapshot on connect, diffs on update, heartbeat every 15s
+4. `GET /api/snapshot` — current state as JSON
+5. **No static file serving** (removed — not in scope for data pipe)
+6. **No `/api/history` endpoint** (removed — history lives in client-side ring buffer)
+7. Client: `new SSETransport(url)` implementing the transport interface from F0
 
-### Batch 2: Visual Experiments (parallel, ~2 hours each)
+### Batch 2: Visual Experiments (~1.5 hours each, all parallel)
 
-All six can run in parallel. Each is a standalone `index.html` that imports mock data and data-pipe from Batch 1.
+All six run in parallel. Each has **dual entry points**: `index.html` (standalone) + `plugin.js` (exports F0 plugin interface). Import shared constants and DataPipe from `../../shared/`.
 
 **F2: Split-Flap Board** (Demarch-r24y)
 
 Location: `apps/Meadowsyn/experiments/split-flap/`
 
 Implementation:
-1. CSS-only split-flap animation (no canvas/WebGL)
-   - Each character is a `<span>` with `::before`/`::after` for top/bottom halves
-   - `@keyframes flip` rotates top half up, reveals new character
-   - Stagger delay per character for cascade effect
+1. CSS-only split-flap animation
+   - `@keyframes flip` with `transform: rotateX()` only (no layout-triggering properties)
+   - **Selective `will-change`**: apply `.flipping` class only during active animation, remove after (addresses P1-7: 3,600 DOM nodes)
 2. Row per agent: `[STATUS] [AGENT NAME........] [BEAD ID....] [TASK TITLE..............] [DURATION]`
-3. Status column: `IDLE` (gray), `EXEC` (green), `DISP` (blue), `FAIL` (red), `GATE` (amber)
-4. Dark background (#0a0a0a), Roboto Mono or JetBrains Mono
-5. Color only on anomaly (FAIL, GATE) — everything else is white/gray per ASM "going gray" principle
-6. Sort: executing first, then dispatching, then idle
-7. Header row: `MEADOWSYN FACTORY STATUS` + timestamp + agent count + queue depth
-8. Auto-refresh every 5s via data-pipe
+3. Status column uses `STATUS_COLORS` from shared constants
+4. Dark background (#0a0a0a), JetBrains Mono
+5. Color only on anomaly (FAIL, GATE) — "going gray" principle
+6. **Alphabetical sort** (removed dynamic sort — conflicts with split-flap animation, per scope review)
+7. **Minimal header**: title + timestamp only (live metrics belong in F10 shell header)
+8. Auto-refresh every 5s via DataPipe
 
 **F3: Hydra Ambient Field** (Demarch-agi0)
 
 Location: `apps/Meadowsyn/experiments/hydra-ambient/`
 
+**License note: hydra-synth is AGPL-3.0.** If AGPL is unacceptable for Meadowsyn's public distribution, replace with raw WebGL shaders or Three.js. Decision needed before execution.
+
 Implementation:
-1. Import `hydra-synth` from CDN/npm
-2. Initialize Hydra on a full-screen `<canvas>`
-3. Bridge layer maps factory metrics to Hydra uniforms:
-   - `throughput` (dispatches/min) -> oscillator frequency (`osc(freq)`)
-   - `errorRate` (blocked/total) -> color temperature shift (`color(r,g,b)`)
-   - `queuePressure` (queue depth / agent count) -> turbulence/noise (`noise(scale)`)
-   - `utilization` (active/total) -> brightness/saturation
-4. Smooth interpolation: lerp current->target over 2s
-5. Four distinct visual states:
-   - Healthy: slow blue-green oscillation, calm
-   - Busy: faster oscillation, warmer tones, more contrast
-   - Degraded: amber tones, visible noise patterns
-   - Critical/Paused: red pulse, high turbulence
-6. Overlay: semi-transparent text showing key metrics on top of generative field
-7. Data updates every 5s from data-pipe
+1. Import hydra-synth via `<script>` tag (UMD build from CDN), `makeGlobal: false`, `detectAudio: false`
+2. Full-screen `<canvas>`
+3. Bridge: factory metrics -> Hydra parameters via arrow-function bindings
+   - throughput -> osc frequency, errorRate -> color temp, queuePressure -> noise, utilization -> brightness
+4. Smooth lerp (current -> target over 2s)
+5. Four states: healthy (blue-green), busy (warmer), degraded (amber noise), critical (red pulse)
+6. **Target: 30fps floor** (not 60fps — integrated GPUs can't sustain 60fps WebGL at 1080p). Auto-reduce resolution if frame time > 33ms.
+7. Overlay: semi-transparent key metrics text
 
 **F4: Cytoscape Agent Graph** (Demarch-cjgj)
 
@@ -118,109 +194,59 @@ Location: `apps/Meadowsyn/experiments/cytoscape-graph/`
 
 Implementation:
 1. Import Cytoscape.js + cytoscape-fcose from CDN
-2. Two node types: agents (circles) and beads (rounded rectangles)
-3. Edges: agent -> bead (working-on), bead -> bead (dependency)
-4. fCoSE layout with constraints: agent nodes in outer ring, bead nodes center
-5. Node styling:
-   - Agent size: proportional to session age
-   - Agent color: idle (gray), executing (green), blocked (red)
-   - Bead size: proportional to priority (P0 largest)
-   - Bead color: open (blue), in-progress (green), blocked (red)
-6. Interactions:
-   - Click agent -> highlight its bead chain, dim others
-   - Click bead -> highlight assigned agent + dependency path
-   - Double-click -> reset highlight
-   - Mouse wheel zoom, pan
-7. Live update: diff graph on each data-pipe update (add/remove/update nodes, animate transitions)
-8. Dark background, minimal labels (show on hover)
+2. Agent nodes (circles) + bead nodes (rounded rectangles) + edges
+3. **Agent ring via manual trig + `fixedNodeConstraint`** (fCoSE has no native ring constraint — addresses P1-6):
+   ```js
+   agents.forEach((a, i) => {
+     const angle = (2 * Math.PI * i) / agents.length
+     constraints.push({ nodeId: a.id, position: { x: R*Math.cos(angle), y: R*Math.sin(angle) } })
+   })
+   ```
+4. Node styling: agent color by status (shared constants), bead size by priority
+5. Click agent -> highlight bead chain, dim others. Click bead -> highlight dep path.
+6. **In-place attribute updates only** (removed animated layout transitions — graph diffing + force layout is a known hard problem, per scope review)
+7. Dark background, labels on hover
 
 **F5: Raster Heatmap** (Demarch-wwo9)
 
 Location: `apps/Meadowsyn/experiments/raster-heatmap/`
 
 Implementation:
-1. HTML `<canvas>` for rendering (performance over DOM)
-2. Grid: columns = 5-min time buckets (last 2 hours = 24 columns), rows = agents
-3. Cell color encoding:
-   - Idle: #1a1a1a (near-black)
-   - Dispatching: #1e3a5f (dark blue)
-   - Executing: #1a4a2a (dark green)
-   - Blocked: #5f1a1a (dark red)
-   - Quality gate: #4a3a1a (dark amber)
-4. Live tail: new column appears on right, oldest scrolls off left
-5. Sort rows by total activity (most active at top) — re-sort every 30s
-6. Hover: tooltip with agent name, bead, exact timestamp, status
-7. Click row: highlight agent, show detail panel
-8. Y-axis labels: agent names (truncated to 12 chars)
-9. X-axis labels: time (HH:MM)
-10. Accumulate history from data-pipe ring buffer
+1. HTML `<canvas>` rendering
+2. Grid: 5-min buckets (24 columns = 2 hours) × N agents
+3. Cell colors from `STATUS_COLORS` (shared constants), desaturated for dark background
+4. Live tail: new column right, oldest scrolls left
+5. Sort by total activity (most active top), re-sort every 30s
+6. Hover tooltip: `mousemove` -> pixel-to-cell via `Math.floor(x/cellW)` with DPI scaling (`devicePixelRatio`)
+7. History accumulated from DataPipe ring buffer (`getHistory()`)
 
 **F6: Loopy Signal Propagation** (Demarch-no1e)
 
 Location: `apps/Meadowsyn/experiments/loopy-signals/`
 
 Implementation:
-1. SVG-based causal loop diagram (D3 or vanilla SVG)
-2. Fixed topology — the factory feedback loop:
-   ```
-   Backlog -> Dispatch -> Execution -> Quality Gates
-      ^                                    |
-      +---- Rework <------------- FAIL ----+
-                                    |
-                                  Ship -> Done
-   ```
-3. Each node shows current count (e.g., Backlog: 33, Executing: 6)
-4. Animated particles on edges: small circles flowing along paths
-5. Particle rate proportional to throughput on that edge
-6. Particle color: green (success path), red (rework path)
-7. Perturbation mode: click any node -> inject a pulse -> watch propagation
-   - Pulse: bright flash that travels along all outgoing edges
-   - Shows delay: each edge has a transit time (faster = higher throughput)
-8. Reinforcing loop indicator (R): dispatch->execute->ship->reduced-backlog->less-dispatch-pressure
-9. Balancing loop indicator (B): quality-gates->rework->backlog-increase->more-dispatch-pressure
-10. Data-driven: node counts from factory-status, edge rates from dispatch history
+1. SVG-based causal loop diagram (D3 v7)
+2. Fixed topology: Backlog -> Dispatch -> Execution -> Quality Gates -> Ship/Rework -> Backlog
+3. Nodes show live counts from factory-status
+4. Animated particles on edges (D3 transition + particle pool, ~20-50 particles)
+5. Particle rate proportional to throughput, color: green (success) / red (rework)
+6. R/B loop indicators
+7. **Perturbation mode deferred to F6b** (removed — doubles interaction scope, per scope review)
+8. Data-driven: node counts from factory-status
 
 **F7: Process Replay** (Demarch-xhxp)
 
 Location: `apps/Meadowsyn/experiments/process-replay/`
 
-Implementation:
-1. Process diagram: horizontal swim-lane layout
-   - Lanes: Backlog | Claimed | Dispatched | Executing | Gated | Shipped/Reworked
-2. Each bead is a token (colored dot) that moves through lanes over time
-3. Playback controls: play/pause, 1x/2x/5x/10x speed, scrub bar
-4. Token enters left (created/opened), exits right (shipped) or loops back (reworked)
-5. Token color: by priority (P0=red, P1=amber, P2=blue)
-6. Token size: by age (older = larger, shows stuck items)
-7. Current time indicator: vertical line on scrub bar
-8. Event log: scrolling sidebar showing dispatch events at current playback time
-9. Data source: accumulate factory-status snapshots into event log
-   - Detect state transitions: if bead was in-progress last snapshot, now closed -> shipped
-10. SVG/Canvas hybrid: SVG for lanes/labels, Canvas for token animation (performance)
+Implementation (trimmed — was 3 experiments in one):
+1. Horizontal swim-lane: Backlog | Claimed | Executing | Gated | Shipped
+2. Tokens (dots) per bead, moving through lanes. Color by priority, size by age.
+3. Play/pause + 1x/2x/5x speed (removed scrub bar and 10x — scope trim)
+4. **D3 + Canvas** for rendering (removed PM4JS — wrong tool, per P1-5. Removed SVG/Canvas hybrid — unnecessary complexity)
+5. **Event accumulation uses DataPipe `getHistory()`** (removed custom accumulator — shared concern, per scope review)
+6. State transitions detected by diffing consecutive snapshots
 
-### Batch 3: Infrastructure (after Batch 1, parallel with Batch 2)
-
-**F9: SSE Data Pipe** (Demarch-p83z)
-
-Location: `apps/Meadowsyn/experiments/data-sse/`
-
-Implementation:
-1. Node.js server (Express or bare http), < 200 lines
-2. Polls `clavain-cli factory-status --json` every 5s (use execFile, not exec, to avoid injection)
-3. `GET /events` — SSE endpoint (`text/event-stream`)
-   - On connect: send full snapshot as `event: snapshot`
-   - On poll: compute diff, send `event: update` with changed fields only
-   - Heartbeat: `event: heartbeat` every 15s (keeps connection alive through proxies)
-4. `GET /api/snapshot` — current full state as JSON
-5. `GET /api/history` — last 720 snapshots (1 hour) as JSON array
-6. Serves static files from `../` (so any experiment can be served)
-7. Client library: same `DataPipe` interface as F8
-   - `new DataPipe({ url: '/events', mode: 'sse' })`
-   - Same `subscribe()`, `getHistory()`, `getLatest()`, `isStale()` API
-   - Auto-reconnect with exponential backoff
-   - Falls back to polling if SSE fails
-
-### Batch 4: Composition (after at least 2 visuals + 1 data pipe work)
+### Batch 3: Composition (after F0 + any 2 visuals + 1 data pipe)
 
 **F10: Composition Shell** (Demarch-tr69)
 
@@ -228,29 +254,34 @@ Location: `apps/Meadowsyn/experiments/shell/`
 
 Implementation:
 1. Hash-based router: `/#/split-flap`, `/#/hydra`, `/#/graph`, `/#/raster`, `/#/loopy`, `/#/replay`
-2. Data source selector (dropdown): mock | static-json | sse
-3. Visual plugin interface:
-   ```js
-   { name: 'split-flap', mount(container, dataPipe), unmount(), thumbnail: '...' }
-   ```
-4. Shared header bar:
-   - Factory status summary: agents active/total, queue depth by priority, uptime
-   - Visual selector: thumbnail strip of all experiments
-   - Data source toggle
-5. URL state: `/#/split-flap?data=sse&agents=20&speed=5` (shareable)
-6. Lazy loading: each visual is a separate JS file, loaded on route change
-7. Transition animation between visuals (fade)
-8. Keyboard shortcuts: 1-6 for visuals, D for data toggle, F for fullscreen
+2. Data source selector (dropdown): **mock | static-json | sse** (removed websocket — it's a non-goal, addresses C1)
+3. Uses F0 plugin interface: `init()` -> `activate()` -> `deactivate()` -> `destroy()`
+4. **Transport swap via `dataPipe.setTransport()`** — preserves history (addresses P0-4)
+5. Shared header bar: factory status summary + visual selector
+6. Each visual loaded via `import()` from its `plugin.js`
+7. **Visuals built with dual entry points in Batch 2** — no unbudgeted adapter work (addresses P1-9)
+8. Removed: URL query-param serialization, keyboard shortcuts, fade transitions (scope trim)
+
+## Library Versions (pinned)
+
+| Library | Version | CDN | Size | License |
+|---------|---------|-----|------|---------|
+| D3 | 7.9.0 | jsDelivr | ~85kB gz | BSD |
+| Cytoscape.js | 3.30.x | jsDelivr | ~100kB gz | MIT |
+| cytoscape-fcose | 2.2.x | jsDelivr | ~27kB gz | MIT |
+| hydra-synth | 1.3.x | unpkg | ~200kB gz | **AGPL-3.0** |
+| TradingView LW Charts | 4.2.x | jsDelivr | ~35kB gz | Apache 2.0 |
+| vis-timeline | 7.7.x | jsDelivr | ~186kB gz | MIT/Apache |
+
+**Dropped**: PM4JS (wrong tool), EventDrops (unmaintained, D3 v4 lock-in), LiteGraph.js (unused).
 
 ## Verification
 
-Each experiment has its own acceptance criteria in the PRD. Verification per batch:
-
-- **Batch 1:** Mock data generates valid JSON; data-pipe subscribes and delivers updates
-- **Batch 2:** Each visual renders with mock data, handles 20+ agents, updates live
-- **Batch 3:** SSE server streams to browser, reconnects on disconnect
-- **Batch 4:** Shell mounts/unmounts visuals, URL state persists, all combos work
+- **Batch 0**: Plugin contract TypeScript-style JSDoc types pass. DataPipe transport swap preserves history. Schema validates against real factory-status output.
+- **Batch 1**: Mock data validates against schema. FetchTransport + SSETransport both deliver updates through DataPipe.
+- **Batch 2**: Each visual renders with mock data via standalone `index.html`. Each `plugin.js` mounts/unmounts cleanly in a test harness.
+- **Batch 3**: Shell loads all 6 visuals, swaps data sources without state loss.
 
 ## Commit Strategy
 
-One commit per experiment (10 commits). Each experiment is self-contained and independently runnable. Push to `mistakeknot/meadowsyn` after each batch.
+One commit per experiment. Push to `mistakeknot/meadowsyn` after each batch. F0 (shared contracts) commits first as the foundation.
