@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ops Room</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <script defer src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+  <style>
+    :root { --bg: #0a0a0a; --fg: #ccc; --dim: #555; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: var(--bg); color: var(--fg); font-family: 'JetBrains Mono', monospace; overflow: hidden; height: 100vh; }
+
+    /* L0: Ambient glow canvas */
+    canvas#glow { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; }
+    /* L1: Graph */
+    #cy { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; background: transparent; }
+
+    /* L2: HUD */
+    .hud { position: fixed; z-index: 2; pointer-events: none; }
+    .hud-top { top: 0; left: 0; right: 0; display: flex; justify-content: space-between; padding: 14px 24px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%); }
+    .hud-bottom { bottom: 0; left: 0; right: 0; padding: 14px 24px;
+      background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
+      display: flex; justify-content: space-between; align-items: center; }
+    .hud-title { font-size: 14px; letter-spacing: 3px; color: rgba(255,255,255,0.3); }
+    .hud-metrics { display: flex; gap: 20px; }
+    .hud-metric .label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.2); }
+    .hud-metric .value { font-size: 13px; color: rgba(255,255,255,0.45); margin-top: 1px; }
+    .hud-hint { font-size: 10px; color: rgba(255,255,255,0.15); }
+    .state-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+    .state-healthy  { color: rgba(46,204,113,0.5); }
+    .state-busy     { color: rgba(241,196,15,0.5); }
+    .state-critical { color: rgba(231,76,60,0.6); }
+
+    /* LOD indicator (F12) */
+    .lod-indicator { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 3; pointer-events: none;
+      display: flex; gap: 4px; align-items: center; }
+    .lod-bar { width: 40px; height: 3px; background: rgba(255,255,255,0.08); transition: background 0.3s; }
+    .lod-bar.active { background: rgba(255,255,255,0.4); }
+    .lod-label { font-size: 10px; letter-spacing: 2px; color: rgba(255,255,255,0.25); margin-left: 10px; }
+
+    /* Color mode indicator (F14) */
+    .mode-indicator { position: fixed; top: 30px; left: 50%; transform: translateX(-50%); z-index: 3; pointer-events: none;
+      display: flex; gap: 6px; align-items: center; }
+    .mode-pip { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.15);
+      transition: background 0.3s, transform 0.3s; }
+    .mode-pip.active { background: rgba(255,255,255,0.6); transform: scale(1.4); }
+    .mode-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+      color: rgba(255,255,255,0.3); margin-left: 10px; }
+
+    /* Legend (F14) */
+    .legend { position: fixed; bottom: 50px; right: 24px; z-index: 3; pointer-events: none;
+      display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: opacity 0.4s; }
+    .legend.visible { opacity: 1; }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 9px; color: rgba(255,255,255,0.3); }
+    .legend-swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+
+    /* Perf overlay (F13) */
+    .perf { position: fixed; top: 54px; right: 24px; z-index: 3; pointer-events: none;
+      font-size: 10px; color: rgba(255,255,255,0.2); text-align: right; line-height: 1.6;
+      opacity: 0; transition: opacity 0.3s; }
+    .perf.visible { opacity: 1; }
+
+    /* Project labels */
+    .project-label { position: fixed; z-index: 3; pointer-events: none;
+      font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
+      color: rgba(255,255,255,0.12); white-space: nowrap; transform: translate(-50%, -50%);
+      transition: opacity 0.5s, font-size 0.5s; }
+    .project-label.lod0 { font-size: 12px; color: rgba(255,255,255,0.25); }
+
+    /* Help overlay */
+    .help-overlay { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 10; pointer-events: none; background: rgba(0,0,0,0.85); border: 1px solid rgba(255,255,255,0.1);
+      padding: 24px 32px; font-size: 12px; line-height: 2; color: rgba(255,255,255,0.5);
+      opacity: 0; transition: opacity 0.3s; }
+    .help-overlay.visible { opacity: 1; }
+    .help-overlay kbd { display: inline-block; background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15); padding: 1px 6px; font-size: 11px; border-radius: 2px; margin: 0 2px; }
+  </style>
+</head>
+<body>
+  <canvas id="glow"></canvas>
+  <div id="cy"></div>
+
+  <!-- HUD Top -->
+  <div class="hud hud-top">
+    <div class="hud-title">OPS ROOM</div>
+    <div class="hud-metrics">
+      <div class="hud-metric"><div class="label">Projects</div><div class="value" id="m-projects">0</div></div>
+      <div class="hud-metric"><div class="label">Agents</div><div class="value" id="m-agents">0</div></div>
+      <div class="hud-metric"><div class="label">Active</div><div class="value" id="m-active">0</div></div>
+      <div class="hud-metric"><div class="label">Beads</div><div class="value" id="m-beads">0</div></div>
+    </div>
+  </div>
+
+  <!-- LOD indicator (F12) -->
+  <div class="lod-indicator">
+    <div class="lod-bar active" id="lod-0"></div>
+    <div class="lod-bar" id="lod-1"></div>
+    <div class="lod-bar" id="lod-2"></div>
+    <div class="lod-label" id="lod-label">LOD 0 — AURAS</div>
+  </div>
+
+  <!-- Color mode indicator (F14) -->
+  <div class="mode-indicator">
+    <div class="mode-pip active" data-mode="0"></div>
+    <div class="mode-pip" data-mode="1"></div>
+    <div class="mode-pip" data-mode="2"></div>
+    <div class="mode-pip" data-mode="3"></div>
+    <div class="mode-label" id="mode-label">STATUS</div>
+  </div>
+
+  <!-- Legend (F14) -->
+  <div class="legend" id="legend"></div>
+
+  <!-- Perf overlay (F13) -->
+  <div class="perf" id="perf">
+    <div>Glow: <span id="p-glow">0</span>ms</div>
+    <div>Sync: <span id="p-sync">0</span>ms</div>
+    <div>Total: <span id="p-total">0</span>ms</div>
+    <div>Nodes: <span id="p-rendered">0</span> / <span id="p-culled">0</span> culled</div>
+  </div>
+
+  <!-- HUD Bottom -->
+  <div class="hud hud-bottom">
+    <div><span class="state-label" id="state-label">HEALTHY</span></div>
+    <div class="hud-hint">Scroll zoom LOD &middot; Tab color mode &middot; Click trace &middot; P perf &middot; ? help</div>
+  </div>
+
+  <!-- Help overlay -->
+  <div class="help-overlay" id="help">
+    <div><kbd>Scroll</kbd> Zoom — changes LOD tier</div>
+    <div><kbd>Tab</kbd> Cycle color encoding</div>
+    <div><kbd>Click</kbd> Trace node neighborhood</div>
+    <div><kbd>Dblclick</kbd> Reset trace</div>
+    <div><kbd>P</kbd> Toggle perf overlay</div>
+    <div><kbd>?</kbd> Toggle this help</div>
+  </div>
+
+  <script type="module">
+    import { DataPipe } from '../data-static/data-pipe.js';
+
+    // =========================================
+    // PROJECT CONSTELLATION (F11)
+    // =========================================
+
+    var LAYER_Y = { L1: 0.78, L2: 0.50, L3: 0.22 };
+
+    var PILLAR_PROJECTS = [
+      { id: 'intercore',   label: 'Intercore',   layer: 'L1', x: 0.30, theme: 'core' },
+      { id: 'intermute',   label: 'Intermute',   layer: 'L1', x: 0.50, theme: 'core' },
+      { id: 'interweave',  label: 'Interweave',  layer: 'L1', x: 0.70, theme: 'core' },
+      { id: 'interband',   label: 'Interband',   layer: 'L1', x: 0.15, theme: 'core' },
+      { id: 'interbase',   label: 'Interbase',   layer: 'L1', x: 0.85, theme: 'sdk' },
+      { id: 'marketplace', label: 'Marketplace', layer: 'L1', x: 0.10, theme: 'infra' },
+      { id: 'clavain',     label: 'Clavain',     layer: 'L2', x: 0.35, theme: 'os' },
+      { id: 'skaffen',     label: 'Skaffen',     layer: 'L2', x: 0.65, theme: 'os' },
+      { id: 'zaka',        label: 'Zaka',        layer: 'L2', x: 0.20, theme: 'os' },
+      { id: 'alwe',        label: 'Alwe',        layer: 'L2', x: 0.80, theme: 'os' },
+      { id: 'ockham',      label: 'Ockham',      layer: 'L2', x: 0.50, theme: 'os' },
+      { id: 'interspect',  label: 'Interspect',  layer: 'L2', x: 0.90, theme: 'os' },
+      { id: 'autarch',     label: 'Autarch',     layer: 'L3', x: 0.30, theme: 'apps' },
+      { id: 'meadowsyn',   label: 'Meadowsyn',   layer: 'L3', x: 0.50, theme: 'apps' },
+      { id: 'intercom',    label: 'Intercom',    layer: 'L3', x: 0.70, theme: 'apps' },
+      { id: 'khouri',      label: 'Khouri',      layer: 'L3', x: 0.15, theme: 'apps' },
+      { id: 'interblog',   label: 'Interblog',   layer: 'L3', x: 0.85, theme: 'apps' },
+    ];
+
+    var INTERVERSE_PLUGINS = [
+      'intercache','interchart','intercheck','intercraft','interdeep','interdev',
+      'interdoc','interfluence','interflux','interform','interhelm','interject',
+      'interkasten','interknow','interlab','interlearn','interleave','interlens',
+      'interline','interlock','interlore','intermap','intermem','intermix',
+      'intermonk','intermux','intername','internext','interpath','interpeer',
+      'interphase','interplug','interpub','interpulse','interrank','interscribe',
+      'intersearch','intersense','intership','intersight','interskill','interslack',
+      'interstat','intersynth','intertest','intertrace','intertrack','intertree',
+      'intertrust','interwatch','tldr-swinton','tool-time','tuivision',
+    ];
+
+    function computeInterversePositions() {
+      var result = [], n = INTERVERSE_PLUGINS.length;
+      for (var i = 0; i < n; i++) {
+        var angle = (2 * Math.PI * i / n) - Math.PI / 2;
+        result.push({ id: INTERVERSE_PLUGINS[i], label: INTERVERSE_PLUGINS[i], layer: 'IV', theme: 'plugins',
+          x: 0.50 + 0.44 * Math.cos(angle), y: 0.50 + 0.40 * Math.sin(angle) });
+      }
+      return result;
+    }
+
+    function getAllProjects() {
+      var all = [];
+      PILLAR_PROJECTS.forEach(function(p) {
+        all.push({ id: p.id, label: p.label, layer: p.layer, theme: p.theme, nx: p.x, ny: LAYER_Y[p.layer] });
+      });
+      computeInterversePositions().forEach(function(p) {
+        all.push({ id: p.id, label: p.label, layer: 'IV', theme: p.theme, nx: p.x, ny: p.y });
+      });
+      return all;
+    }
+
+    var ALL_PROJECTS = getAllProjects();
+    var PROJECT_MAP = new Map();
+    ALL_PROJECTS.forEach(function(p) { PROJECT_MAP.set(p.id, p); });
+    var PROJECT_IDS = ALL_PROJECTS.map(function(p) { return p.id; });
+
+    function projectPosition(p, vW, vH) {
+      var pad = 80;
+      return { x: pad + p.nx * (vW - 2 * pad), y: pad + p.ny * (vH - 2 * pad) };
+    }
+
+    // =========================================
+    // LOD SYSTEM (F12)
+    // =========================================
+
+    var LOD_THRESHOLDS = [0.7, 1.4];
+    var currentLOD = 0;
+    var lodTransition = { agents: 0, beads: 0 };
+    var LOD_NAMES = ['LOD 0 \u2014 AURAS', 'LOD 1 \u2014 AGENTS', 'LOD 2 \u2014 FULL'];
+
+    function computeLOD(zoom) {
+      if (zoom < LOD_THRESHOLDS[0]) return 0;
+      if (zoom < LOD_THRESHOLDS[1]) return 1;
+      return 2;
+    }
+
+    function updateLODIndicator(lod) {
+      for (var i = 0; i <= 2; i++) {
+        document.getElementById('lod-' + i).classList.toggle('active', i <= lod);
+      }
+      document.getElementById('lod-label').textContent = LOD_NAMES[lod];
+      document.querySelectorAll('.project-label').forEach(function(el) {
+        el.classList.toggle('lod0', lod === 0);
+      });
+    }
+
+    // =========================================
+    // COLOR MODE SYSTEM (F14)
+    // =========================================
+
+    var COLOR_MODES = [
+      {
+        name: 'STATUS', key: 'status',
+        agentColors: { idle: '#444', dispatching: '#3498db', executing: '#2ecc71', blocked: '#e74c3c', gated: '#f39c12', shipped: '#1a7a7a' },
+        beadColors: { open: '#3498db', in_progress: '#2ecc71', blocked: '#e74c3c' },
+        glowColors: {
+          idle: {r:60,g:60,b:60}, dispatching: {r:52,g:120,b:210}, executing: {r:46,g:190,b:100},
+          blocked: {r:220,g:60,b:50}, gated: {r:230,g:150,b:30}, shipped: {r:40,g:130,b:130},
+        },
+        legend: [
+          { color: '#444', label: 'Idle' }, { color: '#3498db', label: 'Dispatching' },
+          { color: '#2ecc71', label: 'Executing' }, { color: '#e74c3c', label: 'Blocked' }, { color: '#f39c12', label: 'Gated' },
+        ],
+      },
+      {
+        name: 'THEME', key: 'theme',
+        themeColors: { core: '#e74c3c', os: '#3498db', apps: '#2ecc71', plugins: '#9b59b6', sdk: '#e67e22', infra: '#1abc9c' },
+        legend: [
+          { color: '#e74c3c', label: 'Core' }, { color: '#3498db', label: 'OS' },
+          { color: '#2ecc71', label: 'Apps' }, { color: '#9b59b6', label: 'Plugins' }, { color: '#e67e22', label: 'SDK' },
+        ],
+      },
+      {
+        name: 'AGENT TYPE', key: 'agentType',
+        typeColors: { claude: '#3498db', codex: '#2ecc71', gemini: '#f39c12' },
+        legend: [
+          { color: '#3498db', label: 'Claude' }, { color: '#2ecc71', label: 'Codex' }, { color: '#f39c12', label: 'Gemini' },
+        ],
+      },
+      {
+        name: 'PRIORITY', key: 'priority',
+        priorityColors: { P0: '#e74c3c', P1: '#f39c12', P2: '#3498db', P3: '#555' },
+        legend: [
+          { color: '#e74c3c', label: 'P0 Critical' }, { color: '#f39c12', label: 'P1 High' },
+          { color: '#3498db', label: 'P2 Normal' }, { color: '#555', label: 'P3 Low' },
+        ],
+      },
+    ];
+
+    var currentMode = 0;
+    var transitionProgress = 1;
+    var prevColors = new Map();
+    var targetColors = new Map();
+
+    function getNodeColor(node, modeIdx) {
+      var mode = COLOR_MODES[modeIdx];
+      var type = node.data('type');
+      if (mode.key === 'status') {
+        if (type === 'agent') return mode.agentColors[node.data('status')] || mode.agentColors.idle;
+        return mode.beadColors[node.data('beadStatus') || node.data('status')] || mode.beadColors.open;
+      }
+      if (mode.key === 'theme') {
+        var proj = node.data('project');
+        var pd = PROJECT_MAP.get(proj);
+        return mode.themeColors[pd ? pd.theme : 'plugins'] || '#555';
+      }
+      if (mode.key === 'agentType') return mode.typeColors[node.data('agentType') || 'claude'] || '#555';
+      if (mode.key === 'priority') return mode.priorityColors[node.data('priority') || 'P2'] || '#555';
+      return '#555';
+    }
+
+    function hexToRgb(hex) {
+      return { r: parseInt(hex.slice(1,3),16), g: parseInt(hex.slice(3,5),16), b: parseInt(hex.slice(5,7),16) };
+    }
+    function rgbToHex(r, g, b) {
+      return '#' + [r,g,b].map(function(c) { var h = Math.round(c).toString(16); return h.length<2 ? '0'+h : h; }).join('');
+    }
+    function lerpColor(h1, h2, t) {
+      var a = hexToRgb(h1), b = hexToRgb(h2);
+      return rgbToHex(lerp(a.r,b.r,t), lerp(a.g,b.g,t), lerp(a.b,b.b,t));
+    }
+
+    function applyColorTransition() {
+      if (!cy) return;
+      cy.nodes('[type != "anchor"]').forEach(function(node) {
+        var id = node.id();
+        var prev = prevColors.get(id) || '#555';
+        var target = targetColors.get(id) || '#555';
+        node.data('color', transitionProgress >= 1 ? target : lerpColor(prev, target, transitionProgress));
+      });
+    }
+
+    function switchMode(newMode) {
+      if (newMode === currentMode && transitionProgress >= 1) return;
+      if (cy) {
+        cy.nodes('[type != "anchor"]').forEach(function(node) {
+          prevColors.set(node.id(), node.data('color') || '#555');
+        });
+      }
+      currentMode = newMode;
+      transitionProgress = 0;
+      if (cy) {
+        cy.nodes('[type != "anchor"]').forEach(function(node) {
+          targetColors.set(node.id(), getNodeColor(node, currentMode));
+        });
+      }
+      var pips = document.querySelectorAll('.mode-pip');
+      pips.forEach(function(pip, i) { pip.classList.toggle('active', i === currentMode); });
+      document.getElementById('mode-label').textContent = COLOR_MODES[currentMode].name;
+      updateLegend();
+      try { localStorage.setItem('meadowsyn-opsroom-mode', String(currentMode)); } catch(e) {}
+    }
+
+    function updateLegend() {
+      var legendEl = document.getElementById('legend');
+      while (legendEl.firstChild) legendEl.removeChild(legendEl.firstChild);
+      var mode = COLOR_MODES[currentMode];
+      (mode.legend || []).forEach(function(item) {
+        var row = document.createElement('div');
+        row.className = 'legend-item';
+        var swatch = document.createElement('div');
+        swatch.className = 'legend-swatch';
+        swatch.style.background = item.color;
+        var label = document.createElement('span');
+        label.textContent = item.label;
+        row.appendChild(swatch);
+        row.appendChild(label);
+        legendEl.appendChild(row);
+      });
+      legendEl.classList.add('visible');
+      clearTimeout(legendEl._fadeTimer);
+      legendEl._fadeTimer = setTimeout(function() { legendEl.classList.remove('visible'); }, 3000);
+    }
+
+    // =========================================
+    // AMBIENT GLOW ENGINE (F13 optimized)
+    // =========================================
+
+    var glowCanvas = document.getElementById('glow');
+    var glowCtx = glowCanvas.getContext('2d');
+    var W, H, dpr;
+
+    var GLOW_INTENSITY = {
+      idle: 0.02, dispatching: 0.08, executing: 0.03,
+      blocked: 0.35, gated: 0.28, shipped: 0.04,
+    };
+    var GLOW_RADIUS = 120;
+    var AURA_RADIUS = 200;
+    var glowTextures = {};
+    var auraTexture = null;
+    var glowNodes = new Map();
+    var projectAuras = new Map();
+    var perfStats = { sync: 0, draw: 0, total: 0, rendered: 0, culled: 0 };
+
+    function initGlowTextures() {
+      var gc = COLOR_MODES[0].glowColors;
+      var size = GLOW_RADIUS * 2;
+      Object.keys(gc).forEach(function(status) {
+        var c = gc[status];
+        var off = document.createElement('canvas');
+        off.width = size; off.height = size;
+        var ctx = off.getContext('2d');
+        var grad = ctx.createRadialGradient(GLOW_RADIUS, GLOW_RADIUS, 0, GLOW_RADIUS, GLOW_RADIUS, GLOW_RADIUS);
+        grad.addColorStop(0, 'rgba('+c.r+','+c.g+','+c.b+',1)');
+        grad.addColorStop(0.4, 'rgba('+c.r+','+c.g+','+c.b+',0.4)');
+        grad.addColorStop(1, 'rgba('+c.r+','+c.g+','+c.b+',0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+        glowTextures[status] = off;
+      });
+      // Project aura texture
+      var aSize = AURA_RADIUS * 2;
+      auraTexture = document.createElement('canvas');
+      auraTexture.width = aSize; auraTexture.height = aSize;
+      var actx = auraTexture.getContext('2d');
+      var ag = actx.createRadialGradient(AURA_RADIUS, AURA_RADIUS, 0, AURA_RADIUS, AURA_RADIUS, AURA_RADIUS);
+      ag.addColorStop(0, 'rgba(255,255,255,1)');
+      ag.addColorStop(0.3, 'rgba(255,255,255,0.3)');
+      ag.addColorStop(1, 'rgba(255,255,255,0)');
+      actx.fillStyle = ag;
+      actx.fillRect(0, 0, aSize, aSize);
+    }
+
+    function resizeGlow() {
+      dpr = window.devicePixelRatio || 1;
+      W = window.innerWidth; H = window.innerHeight;
+      glowCanvas.width = W * dpr * 0.5;
+      glowCanvas.height = H * dpr * 0.5;
+      glowCanvas.style.width = W + 'px';
+      glowCanvas.style.height = H + 'px';
+      glowCtx.setTransform(dpr * 0.5, 0, 0, dpr * 0.5, 0, 0);
+    }
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    function drawGlow() {
+      var t0 = performance.now();
+      glowCtx.clearRect(0, 0, W, H);
+      var rendered = 0, culled = 0;
+
+      // Project auras (always visible, LOD-aware intensity)
+      projectAuras.forEach(function(aura) {
+        if (aura.intensity < 0.005) { culled++; return; }
+        glowCtx.globalAlpha = aura.intensity;
+        glowCtx.drawImage(auraTexture, aura.x - AURA_RADIUS, aura.y - AURA_RADIUS, AURA_RADIUS * 2, AURA_RADIUS * 2);
+        rendered++;
+      });
+
+      // Per-node glows (LOD-scaled)
+      glowNodes.forEach(function(g) {
+        if (g.intensity < 0.008) { culled++; return; }
+        var lodFade = g.isBead ? lodTransition.beads : lodTransition.agents;
+        if (lodFade < 0.01) { culled++; return; }
+        var tex = glowTextures[g.status] || glowTextures.idle;
+        if (!tex) { culled++; return; }
+        glowCtx.globalAlpha = g.intensity * lodFade;
+        glowCtx.drawImage(tex, g.x - g.radius, g.y - g.radius, g.radius * 2, g.radius * 2);
+        rendered++;
+      });
+
+      glowCtx.globalAlpha = 1;
+      perfStats.draw = performance.now() - t0;
+      perfStats.rendered = rendered;
+      perfStats.culled = culled;
+    }
+
+    function syncGlow() {
+      var t0 = performance.now();
+      if (!cy) return;
+
+      cy.nodes('[type != "anchor"]').forEach(function(node) {
+        var id = node.id();
+        var pos = node.renderedPosition();
+        var status = node.data('status') || 'idle';
+        var ti = GLOW_INTENSITY[status] || GLOW_INTENSITY.idle;
+        var isBead = node.data('type') === 'bead';
+        ti = isBead ? ti * 0.3 : ti;
+        var tr = isBead ? GLOW_RADIUS * 0.4 : GLOW_RADIUS;
+
+        var g = glowNodes.get(id);
+        if (!g) { g = { x: pos.x, y: pos.y, radius: tr, intensity: 0, status: status, isBead: isBead }; glowNodes.set(id, g); }
+        g.x = lerp(g.x, pos.x, 0.15);
+        g.y = lerp(g.y, pos.y, 0.15);
+        g.intensity = lerp(g.intensity, ti, 0.06);
+        g.radius = lerp(g.radius, tr, 0.06);
+        g.status = status;
+        g.isBead = isBead;
+      });
+
+      glowNodes.forEach(function(_, id) { if (!cy.getElementById(id).length) glowNodes.delete(id); });
+
+      // Project auras — LOD-aware (more prominent at LOD 0)
+      ALL_PROJECTS.forEach(function(proj) {
+        var pos = projectPosition(proj, W, H);
+        var aura = projectAuras.get(proj.id);
+        if (!aura) { aura = { x: pos.x, y: pos.y, intensity: 0 }; projectAuras.set(proj.id, aura); }
+        aura.x = pos.x; aura.y = pos.y;
+        var total = 0, blocked = 0;
+        cy.nodes('[project = "' + proj.id + '"]').forEach(function(n) {
+          total++; if (n.data('status') === 'blocked' || n.data('status') === 'gated') blocked++;
+        });
+        var base = currentLOD === 0 ? 0.04 : 0.015;
+        var target = total > 0 ? base + 0.12 * (blocked / total) : base * 0.5;
+        aura.intensity = lerp(aura.intensity, target, 0.04);
+      });
+
+      perfStats.sync = performance.now() - t0;
+    }
+
+    // =========================================
+    // PROJECT LABELS
+    // =========================================
+
+    var projectLabelEls = new Map();
+    function createProjectLabels() {
+      PILLAR_PROJECTS.forEach(function(proj) {
+        var el = document.createElement('div');
+        el.className = 'project-label lod0';
+        el.textContent = proj.label;
+        document.body.appendChild(el);
+        projectLabelEls.set(proj.id, el);
+      });
+    }
+    function updateProjectLabels() {
+      PILLAR_PROJECTS.forEach(function(proj) {
+        var el = projectLabelEls.get(proj.id);
+        if (!el) return;
+        var pd = PROJECT_MAP.get(proj.id);
+        if (!pd) return;
+        var pos = projectPosition(pd, W, H);
+        el.style.left = pos.x + 'px';
+        el.style.top = (pos.y - 50) + 'px';
+      });
+    }
+
+    // =========================================
+    // CYTOSCAPE GRAPH
+    // =========================================
+
+    var cy;
+
+    function initCytoscape() {
+      if (window.cytoscapeFcose && typeof cytoscape !== 'undefined') {
+        try { var exts = cytoscape.extensions(); if (!(exts && exts.layout && exts.layout.fcose)) cytoscape.use(window.cytoscapeFcose); } catch(e) {}
+      }
+
+      cy = cytoscape({
+        container: document.getElementById('cy'),
+        style: [
+          { selector: 'node[type="anchor"]', style: { 'width': 1, 'height': 1, 'opacity': 0, 'label': '', 'events': 'no' } },
+          { selector: 'node[type="agent"]', style: {
+            'shape': 'ellipse', 'label': 'data(label)', 'text-valign': 'bottom', 'text-halign': 'center',
+            'font-size': '9px', 'font-family': 'JetBrains Mono, monospace', 'color': 'rgba(255,255,255,0.5)',
+            'text-margin-y': 6, 'text-outline-color': 'rgba(0,0,0,0.8)', 'text-outline-width': 2,
+            'background-color': 'data(color)', 'width': 'data(size)', 'height': 'data(size)',
+            'border-width': 1.5, 'border-color': 'rgba(255,255,255,0.12)', 'overlay-opacity': 0, 'opacity': 0.01,
+          }},
+          { selector: 'node[type="bead"]', style: {
+            'shape': 'round-rectangle', 'label': 'data(label)', 'text-valign': 'bottom', 'text-halign': 'center',
+            'font-size': '8px', 'font-family': 'JetBrains Mono, monospace', 'color': 'rgba(255,255,255,0.35)',
+            'text-margin-y': 6, 'text-outline-color': 'rgba(0,0,0,0.8)', 'text-outline-width': 2,
+            'background-color': 'data(color)', 'width': 'data(size)', 'height': 'mapData(size, 20, 40, 14, 28)',
+            'border-width': 0, 'overlay-opacity': 0, 'opacity': 0.01,
+          }},
+          { selector: 'edge[type="anchor"]', style: { 'opacity': 0, 'events': 'no' } },
+          { selector: 'edge[type="works-on"]', style: {
+            'line-color': 'rgba(255,255,255,0.07)', 'target-arrow-color': 'rgba(255,255,255,0.07)',
+            'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'width': 1.5, 'arrow-scale': 0.7,
+            'overlay-opacity': 0, 'opacity': 0.01,
+          }},
+          { selector: 'edge[type="depends-on"]', style: {
+            'line-color': 'rgba(100,120,200,0.12)', 'line-style': 'dashed',
+            'target-arrow-color': 'rgba(100,120,200,0.12)', 'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier', 'width': 1, 'arrow-scale': 0.6, 'overlay-opacity': 0, 'opacity': 0.01,
+          }},
+          { selector: '.highlighted', style: { 'opacity': 1, 'z-index': 10 } },
+          { selector: '.dimmed', style: { 'opacity': 0.05 } },
+          { selector: 'edge.highlighted[type="works-on"]', style: {
+            'line-color': 'rgba(46,204,113,0.6)', 'target-arrow-color': 'rgba(46,204,113,0.6)', 'width': 2.5 } },
+          { selector: 'edge.highlighted[type="depends-on"]', style: {
+            'line-color': 'rgba(74,106,219,0.5)', 'target-arrow-color': 'rgba(74,106,219,0.5)', 'width': 2 } },
+        ],
+        layout: { name: 'preset' },
+        minZoom: 0.3, maxZoom: 3, wheelSensitivity: 0.3,
+      });
+
+      // LOD: zoom drives tier changes (F12)
+      cy.on('zoom', function() {
+        var newLOD = computeLOD(cy.zoom());
+        if (newLOD !== currentLOD) {
+          currentLOD = newLOD;
+          updateLODIndicator(currentLOD);
+        }
+      });
+
+      // Interaction: click to trace (F11)
+      cy.on('tap', 'node[type != "anchor"]', function(evt) {
+        var node = evt.target;
+        cy.elements().addClass('dimmed');
+        var hood = node.neighborhood().add(node);
+        if (node.data('type') === 'bead') {
+          hood = hood.merge(node.successors()).merge(node.predecessors());
+        }
+        hood.filter('[type != "anchor"]').removeClass('dimmed').addClass('highlighted');
+      });
+      cy.on('tap', function(evt) { if (evt.target === cy) cy.elements().removeClass('dimmed highlighted'); });
+      cy.on('dbltap', function() { cy.elements().removeClass('dimmed highlighted'); });
+
+      // Add invisible anchor nodes for all projects
+      ALL_PROJECTS.forEach(function(proj) {
+        cy.add({ data: { id: 'anchor-' + proj.id, type: 'anchor' }, position: projectPosition(proj, W, H) });
+      });
+    }
+
+    // =========================================
+    // MOCK DATA GENERATOR
+    // =========================================
+
+    var SHIPS = [
+      'Mistake Not', 'Grey Area', 'Falling Outside', 'Sleeper Service',
+      'Just Read Instr.', 'Still Love You', 'So Much Subtlety', 'No Gravitas',
+      'Gravitas Shortfall', 'Honest Mistake', 'No More Nice Guy', 'Quietly Confident',
+      'Sense Amid Madness', 'Profit Margin', 'Limiting Factor', 'Conflict Evidence',
+      'Ethics Gradient', 'Xenophobe', 'Anticipation of Calm', 'Experiencing Sig.',
+      'Serious Callers Only', 'Orbital Delight', 'Absence of Blade', 'Not Invented Here',
+      'Lasting Damage', 'Attitude Adjuster', 'Very Little Gravitas', 'Shoot Them Later',
+      'Unfortunate Conflict', 'Use of Weapons',
+    ];
+
+    var AGENT_TYPES = ['claude', 'codex', 'gemini'];
+    var AGENT_PROJS = new Map();
+    var AGENT_TYPE_MAP = new Map();
+    SHIPS.forEach(function(name, i) {
+      if (i < 4) AGENT_PROJS.set(name, ['clavain','skaffen','ockham','zaka'][i]);
+      else if (i < 8) AGENT_PROJS.set(name, ['intercore','intermute','interweave','interbase'][i-4]);
+      else if (i < 11) AGENT_PROJS.set(name, ['autarch','meadowsyn','intercom'][i-8]);
+      else AGENT_PROJS.set(name, INTERVERSE_PLUGINS[(i-11) % INTERVERSE_PLUGINS.length]);
+      AGENT_TYPE_MAP.set(name, AGENT_TYPES[i % 3]);
+    });
+
+    var BEADS = [], BEAD_PROJS = new Map();
+    for (var i = 0; i < 40; i++) {
+      var bid = 'Demarch-' + (2000 + i).toString(36);
+      BEADS.push({ id: bid, priority: i < 4 ? 'P0' : i < 12 ? 'P1' : 'P2',
+        status: Math.random() < 0.3 ? 'in_progress' : Math.random() < 0.05 ? 'blocked' : 'open' });
+      BEAD_PROJS.set(bid, PROJECT_IDS[i % PROJECT_IDS.length]);
+    }
+    var BEAD_DEPS = [];
+    for (var i = 1; i < BEADS.length; i += 3) BEAD_DEPS.push([BEADS[i].id, BEADS[i-1].id]);
+
+    var STATUSES = ['idle', 'dispatching', 'executing', 'blocked', 'gated'];
+    var STATUS_W = [0.35, 0.10, 0.35, 0.08, 0.07];
+    function wRand(w) { var r = Math.random(), a = 0; for (var i = 0; i < w.length; i++) { a += w[i]; if (r < a) return i; } return w.length - 1; }
+
+    var ASSIGN = new Map();
+    SHIPS.forEach(function(name) {
+      var n = Math.random() < 0.3 ? 0 : Math.random() < 0.5 ? 1 : 2, bs = [];
+      for (var j = 0; j < n; j++) { var b = BEADS[Math.floor(Math.random() * BEADS.length)].id; if (bs.indexOf(b) < 0) bs.push(b); }
+      ASSIGN.set(name, bs);
+    });
+    var agentStates = new Map();
+
+    function generateSnapshot() {
+      var agents = SHIPS.map(function(name) {
+        var s = agentStates.get(name) || 'idle';
+        if (Math.random() < 0.12) s = STATUSES[wRand(STATUS_W)];
+        agentStates.set(name, s);
+        return { agent: name, status: s, beads: ASSIGN.get(name) || [], project: AGENT_PROJS.get(name),
+          agentType: AGENT_TYPE_MAP.get(name) };
+      });
+      var total = agents.length, active = agents.filter(function(a) { return a.status !== 'idle'; }).length;
+      var blocked = agents.filter(function(a) { return a.status === 'blocked'; }).length;
+      return {
+        timestamp: new Date().toISOString(),
+        fleet: { total: total, active: active, agents: agents },
+        beads: BEADS, bead_deps: BEAD_DEPS,
+        bead_projects: Object.fromEntries(BEAD_PROJS),
+        metrics: { utilization: active / total, errorRate: blocked / Math.max(active, 1) },
+      };
+    }
+
+    // =========================================
+    // DATA -> GRAPH
+    // =========================================
+
+    var firstUpdate = true, layoutPending = false, knownNodeIds = new Set();
+
+    function applySnapshot(snap) {
+      if (!snap || !cy) return;
+      var m = snap.metrics || {};
+
+      // Update HUD
+      document.getElementById('m-projects').textContent = String(ALL_PROJECTS.length);
+      document.getElementById('m-agents').textContent = String(snap.fleet.total);
+      document.getElementById('m-active').textContent = String(snap.fleet.active);
+      document.getElementById('m-beads').textContent = String((snap.beads || []).length);
+
+      var state = (m.errorRate || 0) > 0.3 ? 'critical' : (m.utilization || 0) > 0.7 ? 'busy' : 'healthy';
+      var sl = document.getElementById('state-label');
+      sl.textContent = state.toUpperCase();
+      sl.className = 'state-label state-' + state;
+
+      var toAdd = [], newIds = new Set();
+
+      // Agents
+      snap.fleet.agents.forEach(function(agent) {
+        var id = 'a-' + agent.agent.replace(/[^a-z0-9]/gi, '_');
+        newIds.add(id);
+        var color = getNodeColor({ data: function(k) {
+          if (k === 'type') return 'agent'; if (k === 'status') return agent.status;
+          if (k === 'project') return agent.project; if (k === 'agentType') return agent.agentType;
+          if (k === 'priority') return 'P2'; return '';
+        }}, currentMode);
+        var sz = agent.status === 'idle' ? 16 : 24;
+        var ex = cy.getElementById(id);
+        if (ex.length) {
+          ex.data('color', color); ex.data('size', sz); ex.data('status', agent.status);
+          ex.data('agentType', agent.agentType);
+        } else {
+          var pd = PROJECT_MAP.get(agent.project);
+          var ap = pd ? projectPosition(pd, W, H) : { x: W / 2, y: H / 2 };
+          toAdd.push({ data: { id: id, label: agent.agent, type: 'agent', color: color, size: sz,
+            status: agent.status, project: agent.project, agentType: agent.agentType || 'claude' },
+            position: { x: ap.x + (Math.random() - 0.5) * 60, y: ap.y + (Math.random() - 0.5) * 60 } });
+          toAdd.push({ data: { id: 'anc-' + id, source: id, target: 'anchor-' + agent.project, type: 'anchor', weight: 8 } });
+          layoutPending = true;
+        }
+
+        (agent.beads || []).forEach(function(bid) {
+          var eid = id + '->' + bid;
+          if (!cy.getElementById(eid).length) toAdd.push({ data: { id: eid, source: id, target: bid, type: 'works-on' } });
+        });
+      });
+
+      // Beads
+      var bp = snap.bead_projects || {};
+      (snap.beads || []).forEach(function(b) {
+        newIds.add(b.id);
+        var color = getNodeColor({ data: function(k) {
+          if (k === 'type') return 'bead'; if (k === 'status') return b.status;
+          if (k === 'beadStatus') return b.status; if (k === 'project') return bp[b.id] || 'clavain';
+          if (k === 'agentType') return 'claude'; if (k === 'priority') return b.priority; return '';
+        }}, currentMode);
+        var sz = b.priority === 'P0' ? 36 : b.priority === 'P1' ? 26 : 18;
+        var ex = cy.getElementById(b.id);
+        if (ex.length) {
+          ex.data('color', color); ex.data('size', sz); ex.data('status', b.status);
+        } else {
+          var proj = bp[b.id] || 'clavain';
+          var pd = PROJECT_MAP.get(proj);
+          var ap = pd ? projectPosition(pd, W, H) : { x: W / 2, y: H / 2 };
+          toAdd.push({ data: { id: b.id, label: b.id, type: 'bead', color: color, size: sz,
+            status: b.status, beadStatus: b.status, project: proj, priority: b.priority || 'P2' },
+            position: { x: ap.x + (Math.random() - 0.5) * 40, y: ap.y + (Math.random() - 0.5) * 40 } });
+          toAdd.push({ data: { id: 'anc-' + b.id, source: b.id, target: 'anchor-' + proj, type: 'anchor', weight: 5 } });
+          layoutPending = true;
+        }
+      });
+
+      // Bead dependencies
+      (snap.bead_deps || []).forEach(function(d) {
+        var eid = 'dep-' + d[0] + '->' + d[1];
+        if (!cy.getElementById(eid).length) toAdd.push({ data: { id: eid, source: d[0], target: d[1], type: 'depends-on' } });
+      });
+
+      // Remove stale nodes
+      knownNodeIds.forEach(function(id) {
+        if (!newIds.has(id) && cy.getElementById(id).length) { cy.remove(cy.getElementById(id)); layoutPending = true; }
+      });
+      knownNodeIds = newIds;
+
+      if (toAdd.length) cy.add(toAdd);
+      if (layoutPending) { runLayout(); layoutPending = false; }
+    }
+
+    function runLayout() {
+      var fixed = [];
+      ALL_PROJECTS.forEach(function(proj) { fixed.push({ nodeId: 'anchor-' + proj.id, position: projectPosition(proj, W, H) }); });
+      var hasFcose = false;
+      try { var exts = cytoscape.extensions(); hasFcose = !!(exts && exts.layout && exts.layout.fcose); } catch(e) {}
+
+      cy.layout(hasFcose ? {
+        name: 'fcose', animate: false, randomize: firstUpdate,
+        fixedNodeConstraint: fixed,
+        nodeRepulsion: function() { return 4500; },
+        idealEdgeLength: function(e) { return e.data('type') === 'anchor' ? 30 : 60; },
+        edgeElasticity: function(e) { return e.data('type') === 'anchor' ? 0.8 : 0.1; },
+        gravity: 0.25, gravityRange: 3.0, numIter: firstUpdate ? 300 : 80, padding: 40, fit: firstUpdate,
+      } : {
+        name: 'cose', animate: false, randomize: firstUpdate,
+        nodeRepulsion: function() { return 6000; }, idealEdgeLength: function() { return 60; },
+        gravity: 0.4, numIter: 250, padding: 40, fit: firstUpdate,
+      }).run();
+      firstUpdate = false;
+    }
+
+    // =========================================
+    // ANIMATION LOOP
+    // =========================================
+
+    var frameCount = 0;
+
+    function animate() {
+      var t0 = performance.now();
+
+      // LOD transitions (F12)
+      var agentTarget = currentLOD >= 1 ? 1 : 0;
+      var beadTarget = currentLOD >= 2 ? 1 : 0;
+      lodTransition.agents = lerp(lodTransition.agents, agentTarget, 0.08);
+      lodTransition.beads = lerp(lodTransition.beads, beadTarget, 0.08);
+
+      // Apply LOD opacity to Cytoscape nodes
+      if (cy) {
+        var agentOpacity = Math.max(0.01, lodTransition.agents);
+        var beadOpacity = Math.max(0.01, lodTransition.beads);
+        cy.nodes('[type = "agent"]').style('opacity', agentOpacity);
+        cy.nodes('[type = "bead"]').style('opacity', beadOpacity);
+        cy.edges('[type = "works-on"]').style('opacity', agentOpacity * 0.5);
+        cy.edges('[type = "depends-on"]').style('opacity', beadOpacity * 0.5);
+      }
+
+      // Color transition (F14)
+      if (transitionProgress < 1) {
+        transitionProgress = Math.min(1, transitionProgress + 0.04);
+        applyColorTransition();
+      }
+
+      // Glow (F13)
+      syncGlow();
+      drawGlow();
+
+      perfStats.total = performance.now() - t0;
+
+      // Update perf HUD every 30 frames
+      frameCount++;
+      if (frameCount % 30 === 0) {
+        document.getElementById('p-glow').textContent = perfStats.draw.toFixed(1);
+        document.getElementById('p-sync').textContent = perfStats.sync.toFixed(1);
+        document.getElementById('p-total').textContent = perfStats.total.toFixed(1);
+        document.getElementById('p-rendered').textContent = String(perfStats.rendered);
+        document.getElementById('p-culled').textContent = String(perfStats.culled);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // =========================================
+    // KEYBOARD HANDLERS
+    // =========================================
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Tab' && e.target === document.body) {
+        e.preventDefault();
+        switchMode((currentMode + 1) % COLOR_MODES.length);
+      }
+      if (e.key === 'p' || e.key === 'P') {
+        document.getElementById('perf').classList.toggle('visible');
+      }
+      if (e.key === '?') {
+        document.getElementById('help').classList.toggle('visible');
+      }
+    });
+
+    // =========================================
+    // INIT
+    // =========================================
+
+    function init() {
+      initGlowTextures();
+      resizeGlow();
+      createProjectLabels();
+      updateProjectLabels();
+      initCytoscape();
+
+      // Restore color mode preference
+      try {
+        var savedMode = parseInt(localStorage.getItem('meadowsyn-opsroom-mode'));
+        if (savedMode >= 0 && savedMode < COLOR_MODES.length) {
+          currentMode = savedMode;
+          var pips = document.querySelectorAll('.mode-pip');
+          pips.forEach(function(pip, i) { pip.classList.toggle('active', i === currentMode); });
+          document.getElementById('mode-label').textContent = COLOR_MODES[currentMode].name;
+        }
+      } catch(e) {}
+
+      var pipe = new DataPipe({ generator: generateSnapshot, interval: 4000, bufferSize: 100 });
+      pipe.subscribe(applySnapshot);
+
+      window.addEventListener('resize', function() {
+        W = window.innerWidth; H = window.innerHeight;
+        resizeGlow();
+        cy.resize();
+        updateProjectLabels();
+        ALL_PROJECTS.forEach(function(proj) {
+          var a = cy.getElementById('anchor-' + proj.id);
+          if (a.length) a.position(projectPosition(proj, W, H));
+        });
+      });
+
+      setTimeout(function() {
+        resizeGlow();
+        cy.resize();
+        updateProjectLabels();
+        pipe.start();
+        requestAnimationFrame(animate);
+      }, 400);
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else setTimeout(init, 100);
+  </script>
+</body>
+</html>
